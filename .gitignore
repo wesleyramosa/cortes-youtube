@@ -1,0 +1,6 @@
+trabalho/
+saida/
+cookies.txt
+client_secret*.json
+.venv/
+__pycache__/

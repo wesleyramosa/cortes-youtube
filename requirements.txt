@@ -1,0 +1,6 @@
+yt-dlp
+faster-whisper
+av<16
+requests
+google-api-python-client
+google-auth

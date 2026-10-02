@@ -1,0 +1,347 @@
+"""Pipeline de cortes: baixa um vídeo do YouTube, escolhe os melhores trechos
+com o Gemini, corta em 9:16 com legenda queimada e publica como Short.
+
+Configuração por variáveis de ambiente (o workflow do GitHub Actions preenche)
+ou por argumentos de linha de comando, para testar localmente.
+"""
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+TRAB = Path("trabalho")
+SAIDA = Path("saida")
+IDIOMAS = {"pt": "português do Brasil", "en": "inglês", "es": "espanhol"}
+
+
+def env(nome, padrao=""):
+    return os.environ.get(nome, "").strip() or padrao
+
+
+def run(cmd):
+    print("+", " ".join(str(c) for c in cmd), flush=True)
+    subprocess.run([str(c) for c in cmd], check=True)
+
+
+# ---------------------------------------------------------------- download
+
+def baixar(video_id, cookies):
+    TRAB.mkdir(exist_ok=True)
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    base = ["yt-dlp", "--no-playlist", "--no-warnings"]
+    if cookies and Path(cookies).exists():
+        base += ["--cookies", cookies]
+    run(base + [
+        "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+        "--merge-output-format", "mp4", "--write-info-json",
+        "-o", str(TRAB / "video.%(ext)s"), url,
+    ])
+    info = json.loads((TRAB / "video.info.json").read_text(encoding="utf-8"))
+
+    # Legendas em chamada separada: falha aqui não deve derrubar o pipeline.
+    lang = escolher_legenda(info)
+    if lang:
+        subprocess.run([str(c) for c in base + [
+            "--skip-download", "--write-subs", "--write-auto-subs",
+            "--sub-langs", lang, "--sub-format", "json3",
+            "-o", str(TRAB / "video.%(ext)s"), url,
+        ]])
+    return str(TRAB / "video.mp4"), info
+
+
+def escolher_legenda(info):
+    """Prefere legenda manual no idioma do vídeo; senão a automática original."""
+    idioma = (info.get("language") or "").split("-")[0]
+    manuais = info.get("subtitles") or {}
+    autos = info.get("automatic_captions") or {}
+    for k in manuais:
+        if idioma and k.split("-")[0] == idioma:
+            return k
+    for k in autos:
+        if k.endswith("-orig"):
+            return k
+    if idioma and idioma in autos:
+        return idioma
+    return next(iter(manuais), None)
+
+
+def ler_json3():
+    arqs = glob.glob(str(TRAB / "video.*.json3"))
+    if not arqs:
+        return []
+    dados = json.loads(Path(arqs[0]).read_text(encoding="utf-8"))
+    segs = []
+    for ev in dados.get("events", []):
+        if "segs" not in ev or ev.get("aAppend"):
+            continue
+        txt = "".join(s.get("utf8", "") for s in ev["segs"]).replace("\n", " ").strip()
+        if not txt:
+            continue
+        ini = ev.get("tStartMs", 0) / 1000
+        segs.append({"ini": ini, "fim": ini + ev.get("dDurationMs", 0) / 1000, "txt": txt})
+    return segs
+
+
+# ------------------------------------------------------------- transcrição
+
+_modelo = None
+
+
+def whisper():
+    global _modelo
+    if _modelo is None:
+        from faster_whisper import WhisperModel
+        _modelo = WhisperModel(env("WHISPER_MODEL", "small"), device="cpu", compute_type="int8")
+    return _modelo
+
+
+def transcrever(arquivo, idioma, palavras=False):
+    segs, _ = whisper().transcribe(arquivo, language=idioma or None,
+                                   word_timestamps=palavras, vad_filter=True)
+    segs = list(segs)
+    if palavras:
+        return [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
+    return [{"ini": s.start, "fim": s.end, "txt": s.text.strip()} for s in segs]
+
+
+# ------------------------------------------------------- escolha dos trechos
+
+def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma):
+    chave = env("GEMINI_API_KEY")
+    if not chave:
+        sys.exit("GEMINI_API_KEY não definida (ou use --trechos para testar sem IA).")
+    modelo = env("GEMINI_MODEL", "gemini-2.5-flash")
+    transcricao = "\n".join(f"[{s['ini']:.1f}-{s['fim']:.1f}] {s['txt']}" for s in segs)[:400_000]
+    prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
+Tema do canal: {tema or "geral"}
+Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
+
+Abaixo está a transcrição com tempos em segundos. Escolha os {n} melhores trechos que:
+- sejam AUTOCONTIDOS (façam sentido para quem não viu o vídeo);
+- durem entre {dmin} e {dmax} segundos;
+- comecem com um gancho forte já nos primeiros 3 segundos;
+- terminem numa frase completa, sem cortar a ideia;
+- não se sobreponham.
+Priorize: opinião forte, revelação, história com desfecho, dica prática, humor, conflito.
+
+Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
+{{"cortes":[{{"inicio":0.0,"fim":0.0,"nota":0,"gancho":"primeira frase do trecho","motivo":"por que viraliza",
+"titulo":"título chamativo em {IDIOMAS.get(idioma, idioma)}, até 70 caracteres",
+"descricao":"1 ou 2 frases em {IDIOMAS.get(idioma, idioma)}","hashtags":["sem #, até 5"]}}]}}
+
+TRANSCRIÇÃO:
+{transcricao}"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+    corpo = {"contents": [{"parts": [{"text": prompt}]}],
+             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}}
+    for tentativa in range(5):
+        r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
+        if r.status_code in (429, 500, 503) and tentativa < 4:
+            espera = 30 * (tentativa + 1)
+            print(f"Gemini {r.status_code}, nova tentativa em {espera}s", flush=True)
+            time.sleep(espera)
+            continue
+        r.raise_for_status()
+        break
+    texto = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(texto)["cortes"][:n]
+
+
+def ajustar(corte, duracao, dmin, dmax):
+    ini = max(0.0, float(corte["inicio"]) - 0.2)
+    fim = min(duracao, float(corte["fim"]) + 0.4)
+    if fim - ini > dmax:
+        fim = ini + dmax
+    if fim - ini < dmin:
+        fim = min(duracao, ini + dmin)
+    corte["inicio"], corte["fim"] = round(ini, 2), round(fim, 2)
+    return corte
+
+
+# ----------------------------------------------------------- legenda (ASS)
+
+def ts(seg):
+    cs = int(round(seg * 100))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    s, cs = divmod(cs, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def gerar_ass(palavras, destino, max_palavras=3):
+    cab = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Leg,DejaVu Sans,80,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,70,70,480,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    limpa = lambda p: p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
+    grupos, atual = [], []
+    for p in palavras:
+        if atual and (len(atual) >= max_palavras or p[0] - atual[-1][1] > 0.6):
+            grupos.append(atual)
+            atual = []
+        atual.append(p)
+    if atual:
+        grupos.append(atual)
+
+    linhas = []
+    for gi, g in enumerate(grupos):
+        prox = grupos[gi + 1][0][0] if gi + 1 < len(grupos) else g[-1][1] + 0.5
+        for i, (ini, fim, _) in enumerate(g):
+            fim_ev = g[i + 1][0] if i + 1 < len(g) else min(max(fim, ini + 0.15) + 0.3, prox)
+            texto = " ".join(
+                ("{\\c&H0000FFFF&}" + limpa(w) + "{\\c&H00FFFFFF&}") if j == i else limpa(w)
+                for j, (_, _, w) in enumerate(g))
+            linhas.append(f"Dialogue: 0,{ts(ini)},{ts(fim_ev)},Leg,,0,0,0,,{texto}")
+    Path(destino).write_text(cab + "\n".join(linhas) + "\n", encoding="utf-8")
+
+
+# ------------------------------------------------------------------ render
+
+def renderizar(video, corte, idioma, formato, nome):
+    bruto = TRAB / f"{nome}_bruto.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{corte['inicio']:.2f}", "-i", video,
+         "-t", f"{corte['fim'] - corte['inicio']:.2f}", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", "18", "-c:a", "aac", "-b:a", "160k", bruto])
+
+    ass = TRAB / f"{nome}.ass"
+    gerar_ass(transcrever(str(bruto), idioma, palavras=True), ass)
+    filtro_ass = f"ass={ass.as_posix()}"
+    if formato == "crop":
+        filtro = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,{filtro_ass}[v]"
+    else:  # blur: vídeo inteiro no meio, fundo desfocado
+        filtro = ("[0:v]split[a][b];"
+                  "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:2[bg];"
+                  "[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+                  f"[bg][fg]overlay=(W-w)/2:(H-h)/2,{filtro_ass}[v]")
+    final = SAIDA / f"{nome}.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", bruto, "-filter_complex", filtro,
+         "-map", "[v]", "-map", "0:a?", "-r", "30", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", "21", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+         "-movflags", "+faststart", final])
+    return final
+
+
+# ----------------------------------------------------------------- publicar
+
+def publicar(arquivo, titulo, descricao, tags, privacidade, idioma):
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+
+    creds = Credentials(None, refresh_token=env("YT_REFRESH_TOKEN"),
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=env("YT_CLIENT_ID"), client_secret=env("YT_CLIENT_SECRET"),
+                        scopes=["https://www.googleapis.com/auth/youtube.upload"])
+    yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    corpo = {
+        "snippet": {"title": titulo[:100], "description": descricao[:5000], "tags": tags[:15],
+                    "categoryId": "22", "defaultLanguage": idioma},
+        "status": {"privacyStatus": privacidade, "selfDeclaredMadeForKids": False},
+    }
+    req = yt.videos().insert(part="snippet,status", body=corpo,
+                             media_body=MediaFileUpload(str(arquivo), mimetype="video/mp4",
+                                                        chunksize=-1, resumable=True))
+    resp = None
+    while resp is None:
+        _, resp = req.next_chunk()
+    return resp["id"]
+
+
+def montar_textos(corte, info, video_id):
+    titulo = corte.get("titulo") or info.get("title", "")
+    if len(titulo) <= 90:
+        titulo += " #shorts"
+    tags = [h.lstrip("#").replace(" ", "") for h in corte.get("hashtags", []) if h]
+    licenca = info.get("license") or ""
+    descricao = (f"{corte.get('descricao', '')}\n\n"
+                 + " ".join(f"#{t}" for t in tags)
+                 + f"\n\nTrecho de: {info.get('title', '')} — {info.get('channel', '')}\n"
+                 f"https://youtu.be/{video_id}"
+                 + (f"\nLicença: {licenca}" if licenca else ""))
+    return titulo, descricao, tags
+
+
+# --------------------------------------------------------------------- main
+
+def avisar(url, dados):
+    if not url:
+        return
+    try:
+        requests.post(url, json=dados, timeout=30,
+                      headers={"x-token": env("CALLBACK_TOKEN")}).raise_for_status()
+    except Exception as e:  # o aviso não deve derrubar o pipeline
+        print(f"Falha ao avisar callback: {e}", flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--video-id", default=env("VIDEO_ID"))
+    ap.add_argument("--arquivo", default="", help="vídeo local (pula o download)")
+    ap.add_argument("--tema", default=env("TEMA"))
+    ap.add_argument("--num-cortes", type=int, default=int(env("NUM_CORTES", "1")))
+    ap.add_argument("--dur-min", type=int, default=int(env("DUR_MIN", "20")))
+    ap.add_argument("--dur-max", type=int, default=int(env("DUR_MAX", "58")))
+    ap.add_argument("--idioma", default=env("IDIOMA", "pt"))
+    ap.add_argument("--formato", default=env("FORMATO", "blur"), choices=["blur", "crop"])
+    ap.add_argument("--publicar", default=env("PUBLICAR", "nao"))
+    ap.add_argument("--privacidade", default=env("PRIVACIDADE", "private"))
+    ap.add_argument("--trechos", default="", help="ex.: 120-165,300-340 (pula o Gemini)")
+    ap.add_argument("--cookies", default=env("COOKIES_FILE", "cookies.txt"))
+    a = ap.parse_args()
+
+    SAIDA.mkdir(exist_ok=True)
+    TRAB.mkdir(exist_ok=True)
+    if a.arquivo:
+        video, info = a.arquivo, {"title": Path(a.arquivo).stem}
+    else:
+        video, info = baixar(a.video_id, a.cookies)
+    duracao = float(info.get("duration") or 1e9)
+
+    if a.trechos:
+        cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1])}
+                  for x in a.trechos.split(",")]
+    else:
+        segs = ler_json3()
+        print(f"Legenda do YouTube: {len(segs)} segmentos", flush=True)
+        if not segs:
+            print("Sem legenda — transcrevendo o vídeo inteiro com Whisper", flush=True)
+            segs = transcrever(video, a.idioma)
+        cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max, a.idioma)
+
+    resultado = {"status": "ok", "video_id": a.video_id, "tema": a.tema,
+                 "video_titulo": info.get("title"), "canal": info.get("channel"),
+                 "run_url": env("RUN_URL"), "cortes": []}
+    for i, corte in enumerate(cortes, 1):
+        corte = ajustar(corte, duracao, a.dur_min, a.dur_max)
+        arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}")
+        titulo, descricao, tags = montar_textos(corte, info, a.video_id)
+        corte.update({"arquivo": arquivo.name, "titulo_final": titulo, "descricao_final": descricao})
+        if a.publicar == "sim":
+            corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade, a.idioma)
+            corte["youtube_url"] = f"https://youtube.com/shorts/{corte['youtube_id']}"
+            print(f"Publicado: {corte['youtube_url']}", flush=True)
+        resultado["cortes"].append(corte)
+
+    (SAIDA / "resultado.json").write_text(json.dumps(resultado, ensure_ascii=False, indent=2),
+                                          encoding="utf-8")
+    print(json.dumps(resultado, ensure_ascii=False, indent=2))
+    avisar(env("CALLBACK_URL"), resultado)
+
+
+if __name__ == "__main__":
+    main()
