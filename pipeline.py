@@ -116,7 +116,7 @@ def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma):
     chave = env("GEMINI_API_KEY")
     if not chave:
         sys.exit("GEMINI_API_KEY não definida (ou use --trechos para testar sem IA).")
-    modelo = env("GEMINI_MODEL", "gemini-2.5-flash")
+    modelo = env("GEMINI_MODEL", "gemini-flash-latest")
     transcricao = "\n".join(f"[{s['ini']:.1f}-{s['fim']:.1f}] {s['txt']}" for s in segs)[:400_000]
     prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
 Tema do canal: {tema or "geral"}
@@ -137,20 +137,41 @@ Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
 
 TRANSCRIÇÃO:
 {transcricao}"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
     corpo = {"contents": [{"parts": [{"text": prompt}]}],
              "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}}
     for tentativa in range(5):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
         r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
+        if r.status_code == 404 and tentativa < 4:
+            novo = modelo_flash_disponivel(chave)
+            print(f"Modelo {modelo} não existe mais; usando {novo}", flush=True)
+            if not novo or novo == modelo:
+                break
+            modelo = novo
+            continue
         if r.status_code in (429, 500, 503) and tentativa < 4:
             espera = 30 * (tentativa + 1)
             print(f"Gemini {r.status_code}, nova tentativa em {espera}s", flush=True)
             time.sleep(espera)
             continue
-        r.raise_for_status()
         break
+    if not r.ok:
+        sys.exit(f"Gemini {r.status_code}: {r.text[:1000]}")
     texto = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     return json.loads(texto)["cortes"][:n]
+
+
+def modelo_flash_disponivel(chave):
+    """Escolhe o Flash mais novo que aceita generateContent (o Google aposenta modelos)."""
+    r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
+                     headers={"x-goog-api-key": chave}, params={"pageSize": 200}, timeout=60)
+    if not r.ok:
+        return None
+    nomes = [m["name"].removeprefix("models/") for m in r.json().get("models", [])
+             if "generateContent" in m.get("supportedGenerationMethods", [])]
+    ruins = ("lite", "image", "tts", "audio", "live", "thinking", "exp", "preview")
+    flash = [n for n in nomes if "flash" in n and not any(x in n for x in ruins)]
+    return sorted(flash)[-1] if flash else None
 
 
 def ajustar(corte, duracao, dmin, dmax):
