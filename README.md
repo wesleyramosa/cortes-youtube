@@ -10,6 +10,7 @@ Roda grátis nos servidores do GitHub; o n8n dispara e recebe o resultado.
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey (plano gratuito) |
 | `YT_CLIENT_ID`, `YT_CLIENT_SECRET`, `YT_REFRESH_TOKEN` | `python autorizar_youtube.py client_secret.json` (ver abaixo) |
 | `YT_COOKIES` | cookies.txt (formato Netscape) de uma conta Google **descartável** — evita o bloqueio de download |
+| `GROQ_API_KEY` | opcional, https://console.groq.com/keys — reserva grátis quando o Gemini está sobrecarregado |
 | `CALLBACK_TOKEN` | qualquer senha longa; o n8n confere no header `x-token` |
 
 Variáveis opcionais (aba *Variables*): `GEMINI_MODEL` (padrão `gemini-flash-latest`), `WHISPER_MODEL` (padrão `small`), `CALLBACK_URL`.

@@ -113,10 +113,8 @@ def transcrever(arquivo, idioma, palavras=False):
 # ------------------------------------------------------- escolha dos trechos
 
 def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma):
-    chave = env("GEMINI_API_KEY")
-    if not chave:
-        sys.exit("GEMINI_API_KEY não definida (ou use --trechos para testar sem IA).")
-    modelo = env("GEMINI_MODEL", "gemini-flash-latest")
+    if not (env("GEMINI_API_KEY") or env("GROQ_API_KEY")):
+        sys.exit("Defina GEMINI_API_KEY ou GROQ_API_KEY (ou use --trechos para testar sem IA).")
     transcricao = "\n".join(f"[{s['ini']:.1f}-{s['fim']:.1f}] {s['txt']}" for s in segs)[:400_000]
     prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
 Tema do canal: {tema or "geral"}
@@ -137,34 +135,41 @@ Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
 
 TRANSCRIÇÃO:
 {transcricao}"""
+    for provedor in (gemini, groq):
+        texto = provedor(prompt)
+        if texto:
+            return json.loads(texto)["cortes"][:n]
+    sys.exit("Nenhum provedor de IA respondeu (Gemini e Groq ocupados ou sem chave).")
+
+
+def gemini(prompt):
+    """Tenta o modelo configurado e, se ocupado/aposentado, os outros Flash e Flash-Lite."""
+    chave = env("GEMINI_API_KEY")
+    if not chave:
+        return None
+    modelo = env("GEMINI_MODEL", "gemini-flash-latest")
     corpo = {"contents": [{"parts": [{"text": prompt}]}],
              "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}}
-    # Modelo configurado primeiro; se estiver fora do ar (404) ou sobrecarregado
-    # (429/500/503), passa para o próximo modelo disponível antes de esperar.
-    candidatos = [modelo] + [m for m in modelos_alternativos(chave) if m != modelo]
-    r = None
-    for rodada in range(3):
+    candidatos = [modelo] + [m for m in modelos_gemini(chave) if m != modelo]
+    for rodada in range(2):
         for m in list(candidatos):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
             r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
             if r.ok:
                 print(f"Trechos escolhidos com {m}", flush=True)
-                texto = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(texto)["cortes"][:n]
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             print(f"Gemini {m}: {r.status_code}", flush=True)
-            if r.status_code == 404:
+            if r.status_code not in (429, 500, 503):
+                print(r.text[:500], flush=True)
                 candidatos.remove(m)
-            elif r.status_code not in (429, 500, 503):
-                sys.exit(f"Gemini {r.status_code}: {r.text[:1000]}")
-        espera = 30 * (rodada + 1)
-        print(f"Todos os modelos ocupados; nova rodada em {espera}s", flush=True)
-        time.sleep(espera)
-    sys.exit(f"Gemini indisponível: {r.status_code if r is not None else '?'} "
-             f"{r.text[:1000] if r is not None else ''}")
+        if rodada == 0 and candidatos:
+            print("Gemini ocupado; nova rodada em 30s", flush=True)
+            time.sleep(30)
+    return None
 
 
-def modelos_alternativos(chave):
-    """Flash mais novos primeiro, depois Flash-Lite (o Google aposenta e renomeia modelos)."""
+def modelos_gemini(chave):
+    """Flash e Flash-Lite disponíveis na chave, mais novos primeiro (o Google renomeia modelos)."""
     r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
                      headers={"x-goog-api-key": chave}, params={"pageSize": 200}, timeout=60)
     if not r.ok:
@@ -173,9 +178,33 @@ def modelos_alternativos(chave):
              if "generateContent" in m.get("supportedGenerationMethods", [])]
     ruins = ("image", "tts", "audio", "live", "thinking", "exp", "preview", "embedding")
     ok = [x for x in nomes if "flash" in x and not any(b in x for b in ruins)]
-    flash = sorted((x for x in ok if "lite" not in x), reverse=True)
-    lite = sorted((x for x in ok if "lite" in x), reverse=True)
-    return (flash + lite)[:5]
+    flash = sorted((x for x in ok if "lite" not in x), reverse=True)[:3]
+    lite = sorted((x for x in ok if "lite" in x), reverse=True)[:3]
+    return flash + lite
+
+
+def groq(prompt):
+    """Reserva gratuita quando o Gemini está fora do ar (API compatível com OpenAI)."""
+    chave = env("GROQ_API_KEY")
+    if not chave:
+        return None
+    base = "https://api.groq.com/openai/v1"
+    cab = {"Authorization": f"Bearer {chave}"}
+    modelos = [env("GROQ_MODEL", "llama-3.3-70b-versatile")]
+    lista = requests.get(f"{base}/models", headers=cab, timeout=60)
+    if lista.ok:
+        ids = [m["id"] for m in lista.json().get("data", [])]
+        modelos += sorted((i for i in ids if any(k in i for k in ("70b", "120b", "maverick", "kimi"))),
+                          reverse=True)
+    for m in dict.fromkeys(modelos):
+        r = requests.post(f"{base}/chat/completions", headers=cab, timeout=300, json={
+            "model": m, "temperature": 0.4, "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt}]})
+        if r.ok:
+            print(f"Trechos escolhidos com Groq {m}", flush=True)
+            return r.json()["choices"][0]["message"]["content"]
+        print(f"Groq {m}: {r.status_code} {r.text[:300]}", flush=True)
+    return None
 
 
 def ajustar(corte, duracao, dmin, dmax):
