@@ -139,39 +139,43 @@ TRANSCRIÇÃO:
 {transcricao}"""
     corpo = {"contents": [{"parts": [{"text": prompt}]}],
              "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}}
-    for tentativa in range(5):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
-        r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
-        if r.status_code == 404 and tentativa < 4:
-            novo = modelo_flash_disponivel(chave)
-            print(f"Modelo {modelo} não existe mais; usando {novo}", flush=True)
-            if not novo or novo == modelo:
-                break
-            modelo = novo
-            continue
-        if r.status_code in (429, 500, 503) and tentativa < 4:
-            espera = 30 * (tentativa + 1)
-            print(f"Gemini {r.status_code}, nova tentativa em {espera}s", flush=True)
-            time.sleep(espera)
-            continue
-        break
-    if not r.ok:
-        sys.exit(f"Gemini {r.status_code}: {r.text[:1000]}")
-    texto = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    return json.loads(texto)["cortes"][:n]
+    # Modelo configurado primeiro; se estiver fora do ar (404) ou sobrecarregado
+    # (429/500/503), passa para o próximo modelo disponível antes de esperar.
+    candidatos = [modelo] + [m for m in modelos_alternativos(chave) if m != modelo]
+    r = None
+    for rodada in range(3):
+        for m in list(candidatos):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+            r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
+            if r.ok:
+                print(f"Trechos escolhidos com {m}", flush=True)
+                texto = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(texto)["cortes"][:n]
+            print(f"Gemini {m}: {r.status_code}", flush=True)
+            if r.status_code == 404:
+                candidatos.remove(m)
+            elif r.status_code not in (429, 500, 503):
+                sys.exit(f"Gemini {r.status_code}: {r.text[:1000]}")
+        espera = 30 * (rodada + 1)
+        print(f"Todos os modelos ocupados; nova rodada em {espera}s", flush=True)
+        time.sleep(espera)
+    sys.exit(f"Gemini indisponível: {r.status_code if r is not None else '?'} "
+             f"{r.text[:1000] if r is not None else ''}")
 
 
-def modelo_flash_disponivel(chave):
-    """Escolhe o Flash mais novo que aceita generateContent (o Google aposenta modelos)."""
+def modelos_alternativos(chave):
+    """Flash mais novos primeiro, depois Flash-Lite (o Google aposenta e renomeia modelos)."""
     r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
                      headers={"x-goog-api-key": chave}, params={"pageSize": 200}, timeout=60)
     if not r.ok:
-        return None
+        return ["gemini-flash-lite-latest"]
     nomes = [m["name"].removeprefix("models/") for m in r.json().get("models", [])
              if "generateContent" in m.get("supportedGenerationMethods", [])]
-    ruins = ("lite", "image", "tts", "audio", "live", "thinking", "exp", "preview")
-    flash = [n for n in nomes if "flash" in n and not any(x in n for x in ruins)]
-    return sorted(flash)[-1] if flash else None
+    ruins = ("image", "tts", "audio", "live", "thinking", "exp", "preview", "embedding")
+    ok = [x for x in nomes if "flash" in x and not any(b in x for b in ruins)]
+    flash = sorted((x for x in ok if "lite" not in x), reverse=True)
+    lite = sorted((x for x in ok if "lite" in x), reverse=True)
+    return (flash + lite)[:5]
 
 
 def ajustar(corte, duracao, dmin, dmax):
