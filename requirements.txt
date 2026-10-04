@@ -4,3 +4,4 @@ av<16
 requests
 google-api-python-client
 google-auth
+opencv-python-headless<5

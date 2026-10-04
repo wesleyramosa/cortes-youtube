@@ -25,8 +25,8 @@ on:
         default: private
       formato:
         type: choice
-        options: [blur, crop]
-        default: blur
+        options: [auto, blur, crop]
+        default: auto
 
 concurrency:
   group: corte-${{ github.event.client_payload.video_id || inputs.video_id }}
@@ -41,7 +41,7 @@ jobs:
       NUM_CORTES: ${{ github.event.client_payload.num_cortes || inputs.num_cortes || '1' }}
       PUBLICAR: ${{ github.event.client_payload.publicar || inputs.publicar || 'nao' }}
       PRIVACIDADE: ${{ github.event.client_payload.privacidade || inputs.privacidade || 'private' }}
-      FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'blur' }}
+      FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'auto' }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
       CALLBACK_URL: ${{ github.event.client_payload.callback_url || vars.CALLBACK_URL }}
       CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}

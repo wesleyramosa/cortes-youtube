@@ -264,6 +264,81 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     Path(destino).write_text(cab + "\n".join(linhas) + "\n", encoding="utf-8")
 
 
+# ----------------------------------------------------- enquadramento 9:16
+
+def centros_dos_rostos(arquivo, passo=0.5):
+    """Centro horizontal (0–1) do maior rosto a cada `passo` segundos; None sem rosto."""
+    import cv2
+    frontal = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    perfil = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+    cap = cv2.VideoCapture(arquivo)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    largura = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    altura = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    a_cada = max(1, round(fps * passo))
+    pontos, i = [], 0
+    while True:
+        ok = cap.grab()
+        if not ok:
+            break
+        if i % a_cada == 0:
+            _, quadro = cap.retrieve()
+            esc = 640 / quadro.shape[1]
+            cinza = cv2.cvtColor(cv2.resize(quadro, None, fx=esc, fy=esc), cv2.COLOR_BGR2GRAY)
+            minimo = (int(cinza.shape[0] * 0.08),) * 2
+            rostos = list(frontal.detectMultiScale(cinza, 1.1, 6, minSize=minimo))
+            if not rostos:
+                rostos = list(perfil.detectMultiScale(cinza, 1.1, 6, minSize=minimo))
+            if rostos:
+                x, _, w, _ = max(rostos, key=lambda r: r[2] * r[3])
+                pontos.append((i / fps, (x + w / 2) / cinza.shape[1]))
+            else:
+                pontos.append((i / fps, None))
+        i += 1
+    cap.release()
+    return pontos, largura, altura
+
+
+def filtro_segue_rosto(arquivo, filtro_ass):
+    """Recorte 9:16 em tela cheia que acompanha o rosto, sem tremer (zona morta + transição)."""
+    pontos, largura, altura = centros_dos_rostos(arquivo)
+    cheio = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,{filtro_ass}[v]"
+    if not largura or largura / altura <= 9 / 16 + 0.01:
+        return cheio  # já é vertical
+    achados = [c for _, c in pontos if c is not None]
+    print(f"Rosto encontrado em {len(achados)}/{len(pontos)} amostras", flush=True)
+    if not achados:
+        return cheio  # sem rosto: centro
+
+    # Preenche buracos com o último rosto visto e suaviza com mediana de 5 amostras.
+    ultimo, cheios = achados[0], []
+    for t, c in pontos:
+        ultimo = c if c is not None else ultimo
+        cheios.append((t, ultimo))
+    suaves = []
+    for k, (t, _) in enumerate(cheios):
+        janela = sorted(c for _, c in cheios[max(0, k - 2):k + 3])
+        suaves.append((t, janela[len(janela) // 2]))
+
+    cw = int(altura * 9 / 16) // 2 * 2
+    para_x = lambda c: max(0, min(largura - cw, round(c * largura - cw / 2)))
+    # Só move o quadro quando o rosto sai da zona morta (10% da largura).
+    alvo = suaves[0][1]
+    chaves = [(0.0, para_x(alvo))]
+    for t, c in suaves[1:]:
+        if abs(c - alvo) > 0.10:
+            chaves.append((t, para_x(alvo)))
+            chaves.append((t + 0.4, para_x(c)))
+            alvo = c
+    expr = str(chaves[-1][1])
+    for (t0, x0), (t1, x1) in reversed(list(zip(chaves, chaves[1:]))):
+        trecho = str(x0) if x0 == x1 else f"{x0}+({x1 - x0})*(t-{t0:.2f})/{t1 - t0:.2f}"
+        expr = f"if(lt(t,{t1:.2f}),{trecho},{expr})"
+    print(f"Enquadramento: {len(chaves)} posições", flush=True)
+    return (f"[0:v]crop=w={cw}:h={int(altura) // 2 * 2}:x='{expr}':y=0,"
+            f"scale=1080:1920,{filtro_ass}[v]")
+
+
 # ------------------------------------------------------------------ render
 
 def renderizar(video, corte, idioma, formato, nome):
@@ -275,7 +350,9 @@ def renderizar(video, corte, idioma, formato, nome):
     ass = TRAB / f"{nome}.ass"
     gerar_ass(transcrever(str(bruto), idioma, palavras=True), ass)
     filtro_ass = f"ass={ass.as_posix()}"
-    if formato == "crop":
+    if formato == "auto":
+        filtro = filtro_segue_rosto(str(bruto), filtro_ass)
+    elif formato == "crop":
         filtro = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,{filtro_ass}[v]"
     else:  # blur: vídeo inteiro no meio, fundo desfocado
         filtro = ("[0:v]split[a][b];"
@@ -351,7 +428,7 @@ def main():
     ap.add_argument("--dur-min", type=int, default=int(env("DUR_MIN", "20")))
     ap.add_argument("--dur-max", type=int, default=int(env("DUR_MAX", "58")))
     ap.add_argument("--idioma", default=env("IDIOMA", "pt"))
-    ap.add_argument("--formato", default=env("FORMATO", "blur"), choices=["blur", "crop"])
+    ap.add_argument("--formato", default=env("FORMATO", "auto"), choices=["auto", "blur", "crop"])
     ap.add_argument("--publicar", default=env("PUBLICAR", "nao"))
     ap.add_argument("--privacidade", default=env("PRIVACIDADE", "private"))
     ap.add_argument("--trechos", default="", help="ex.: 120-165,300-340 (pula o Gemini)")
