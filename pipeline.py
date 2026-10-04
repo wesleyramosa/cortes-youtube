@@ -120,7 +120,7 @@ def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma):
 Tema do canal: {tema or "geral"}
 Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
 
-Abaixo está a transcrição com tempos em segundos. Escolha os {n} melhores trechos que:
+Abaixo está a transcrição com tempos em segundos. Escolha os {n} melhores trechos (notas de 0 a 100) que:
 - sejam AUTOCONTIDOS (façam sentido para quem não viu o vídeo);
 - durem entre {dmin} e {dmax} segundos;
 - comecem com um gancho forte já nos primeiros 3 segundos;
@@ -130,6 +130,7 @@ Priorize: opinião forte, revelação, história com desfecho, dica prática, hu
 
 Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
 {{"cortes":[{{"inicio":0.0,"fim":0.0,"nota":0,"gancho":"primeira frase do trecho","motivo":"por que viraliza",
+"chamada":"frase de impacto de 3 a 6 palavras para aparecer na tela, sem emojis",
 "titulo":"título chamativo em {IDIOMAS.get(idioma, idioma)}, até 70 caracteres",
 "descricao":"1 ou 2 frases em {IDIOMAS.get(idioma, idioma)}","hashtags":["sem #, até 5"]}}]}}
 
@@ -220,6 +221,9 @@ def ajustar(corte, duracao, dmin, dmax):
 
 # ----------------------------------------------------------- legenda (ASS)
 
+AMARELO = "&H0000D4FF&"  # ASS usa &HAABBGGRR
+
+
 def ts(seg):
     cs = int(round(seg * 100))
     h, cs = divmod(cs, 360000)
@@ -228,8 +232,13 @@ def ts(seg):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def gerar_ass(palavras, destino, max_palavras=3):
-    cab = """[Script Info]
+def limpa(p):
+    return p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
+
+
+def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3):
+    """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
+    cab = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -238,11 +247,12 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Leg,DejaVu Sans,80,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,70,70,480,1
+Style: Caixa,DejaVu Sans,66,&H00000000,&H00000000,{AMARELO[:-1]},&H00000000,-1,0,0,0,100,100,0,0,3,16,0,8,90,90,250,1
+Style: Marca,DejaVu Sans,34,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,2,40,40,60,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    limpa = lambda p: p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
     grupos, atual = [], []
     for p in palavras:
         if atual and (len(atual) >= max_palavras or p[0] - atual[-1][1] > 0.6):
@@ -258,11 +268,74 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for i, (ini, fim, _) in enumerate(g):
             fim_ev = g[i + 1][0] if i + 1 < len(g) else min(max(fim, ini + 0.15) + 0.3, prox)
             texto = " ".join(
-                ("{\\c&H0000FFFF&}" + limpa(w) + "{\\c&H00FFFFFF&}") if j == i else limpa(w)
+                (r"{\c" + AMARELO + "}" + limpa(w) + r"{\c&H00FFFFFF&}") if j == i else limpa(w)
                 for j, (_, _, w) in enumerate(g))
             linhas.append(f"Dialogue: 0,{ts(ini)},{ts(fim_ev)},Leg,,0,0,0,,{texto}")
+
+    if chamada:  # título-gancho com leve "pop" de entrada
+        linhas.append(f"Dialogue: 1,{ts(0)},{ts(min(3.5, duracao))},Caixa,,0,0,0,,"
+                      r"{\fscx80\fscy80\t(0,150,\fscx100\fscy100)}" + limpa(chamada))
+    if marca:
+        linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Marca,,0,0,0,,{marca}")
+    if duracao > 10:
+        linhas.append(f"Dialogue: 1,{ts(duracao - 2.5)},{ts(duracao)},Caixa,,0,0,0,,"
+                      r"{\fad(200,0)}SIGA PARA MAIS CORTES")
     Path(destino).write_text(cab + "\n".join(linhas) + "\n", encoding="utf-8")
 
+
+# ------------------------------------------------------------ silêncios
+
+def cortar_silencios(arquivo, palavras, destino, pausa=0.6):
+    """Remove pausas longas entre palavras; devolve (arquivo, palavras remapeadas, duração)."""
+    dur = duracao_de(arquivo)
+    if not palavras:
+        return arquivo, palavras, dur
+    trechos = [[max(0.0, palavras[0][0] - 0.1), None]]
+    for (_, fim_ant, _), (ini, _, _) in zip(palavras, palavras[1:]):
+        if ini - fim_ant > pausa:
+            trechos[-1][1] = fim_ant + 0.15
+            trechos.append([ini - 0.1, None])
+    trechos[-1][1] = min(dur, palavras[-1][1] + 0.4)
+    novo = sum(b - a for a, b in trechos)
+    if dur - novo < 0.8:  # pouco a ganhar: mantém o original
+        return arquivo, palavras, dur
+    print(f"Silêncios removidos: {dur - novo:.1f}s ({len(trechos)} trechos)", flush=True)
+    sel = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in trechos)
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", arquivo,
+         "-vf", f"select='{sel}',setpts=N/FRAME_RATE/TB",
+         "-af", f"aselect='{sel}',asetpts=N/SR/TB",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "160k", destino])
+
+    def remapa(x):
+        acum = 0.0
+        for a, b in trechos:
+            if x <= b:
+                return acum + max(0.0, x - a)
+            acum += b - a
+        return acum
+    return str(destino), [(remapa(i), remapa(f), w) for i, f, w in palavras], duracao_de(str(destino))
+
+
+def duracao_de(arquivo):
+    saida = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", arquivo], capture_output=True, text=True).stdout
+    return float(saida.strip() or 0)
+
+
+def zoom_por_frase(palavras, nivel=0.12, max_frase=4.0):
+    """Expressão de zoom: alterna 'punch-in' a cada frase (troca seca, estilo cortes)."""
+    frases, ini, ant = [], None, None
+    for a, b, w in palavras:
+        if ini is None:
+            ini = a
+        elif (a - ant[1] > 0.35 or ant[2].endswith((".", "?", "!")) or a - ini > max_frase):
+            frases.append((ini, a))
+            ini = a
+        ant = (a, b, w)
+    if ini is not None:
+        frases.append((ini, ant[1] + 0.5))
+    pares = [f"between(it,{a:.2f},{b:.2f})" for k, (a, b) in enumerate(frases) if k % 2 == 1]
+    return f"1+{nivel}*({'+'.join(pares)})" if pares else "1"
 
 # ----------------------------------------------------- enquadramento 9:16
 
@@ -298,17 +371,30 @@ def centros_dos_rostos(arquivo, passo=0.5):
     cap.release()
     return pontos, largura, altura
 
+CHEIO = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[f]"
 
-def filtro_segue_rosto(arquivo, filtro_ass):
+
+def enquadrar(arquivo, formato):
+    """Grafo ffmpeg que termina em [f] com o vídeo já em 1080x1920."""
+    if formato == "crop":
+        return CHEIO
+    if formato == "blur":  # vídeo inteiro no meio, fundo desfocado
+        return ("[0:v]split[a][b];"
+                "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:2[bg];"
+                "[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[f]")
+    return filtro_segue_rosto(arquivo)
+
+
+def filtro_segue_rosto(arquivo):
     """Recorte 9:16 em tela cheia que acompanha o rosto, sem tremer (zona morta + transição)."""
     pontos, largura, altura = centros_dos_rostos(arquivo)
-    cheio = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,{filtro_ass}[v]"
     if not largura or largura / altura <= 9 / 16 + 0.01:
-        return cheio  # já é vertical
+        return CHEIO  # já é vertical
     achados = [c for _, c in pontos if c is not None]
     print(f"Rosto encontrado em {len(achados)}/{len(pontos)} amostras", flush=True)
     if not achados:
-        return cheio  # sem rosto: centro
+        return CHEIO  # sem rosto: centro
 
     # Preenche buracos com o último rosto visto e suaviza com mediana de 5 amostras.
     ultimo, cheios = achados[0], []
@@ -335,8 +421,7 @@ def filtro_segue_rosto(arquivo, filtro_ass):
         trecho = str(x0) if x0 == x1 else f"{x0}+({x1 - x0})*(t-{t0:.2f})/{t1 - t0:.2f}"
         expr = f"if(lt(t,{t1:.2f}),{trecho},{expr})"
     print(f"Enquadramento: {len(chaves)} posições", flush=True)
-    return (f"[0:v]crop=w={cw}:h={int(altura) // 2 * 2}:x='{expr}':y=0,"
-            f"scale=1080:1920,{filtro_ass}[v]")
+    return f"[0:v]crop=w={cw}:h={int(altura) // 2 * 2}:x='{expr}':y=0,scale=1080:1920[f]"
 
 
 # ------------------------------------------------------------------ render
@@ -347,21 +432,21 @@ def renderizar(video, corte, idioma, formato, nome):
          "-t", f"{corte['fim'] - corte['inicio']:.2f}", "-c:v", "libx264", "-preset", "veryfast",
          "-crf", "18", "-c:a", "aac", "-b:a", "160k", bruto])
 
+    palavras = transcrever(str(bruto), idioma, palavras=True)
+    fonte, palavras, dur = cortar_silencios(str(bruto), palavras, TRAB / f"{nome}_seco.mp4")
+
     ass = TRAB / f"{nome}.ass"
-    gerar_ass(transcrever(str(bruto), idioma, palavras=True), ass)
-    filtro_ass = f"ass={ass.as_posix()}"
-    if formato == "auto":
-        filtro = filtro_segue_rosto(str(bruto), filtro_ass)
-    elif formato == "crop":
-        filtro = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,{filtro_ass}[v]"
-    else:  # blur: vídeo inteiro no meio, fundo desfocado
-        filtro = ("[0:v]split[a][b];"
-                  "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:2[bg];"
-                  "[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
-                  f"[bg][fg]overlay=(W-w)/2:(H-h)/2,{filtro_ass}[v]")
+    gerar_ass(palavras, ass, dur, chamada=corte.get("chamada", ""), marca=env("MARCA_DAGUA"))
+    filtro = (f"{enquadrar(fonte, formato)};"
+              f"[f]fps=30,zoompan=z='{zoom_por_frase(palavras)}'"
+              ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30,"
+              "eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5,"
+              f"ass={ass.as_posix()}[t];"
+              "color=c=0xFFD400:s=1080x10:r=30[barra];"
+              f"[t][barra]overlay=x='-w+w*t/{max(dur, 1):.2f}':y=H-h:shortest=1[v]")
     final = SAIDA / f"{nome}.mp4"
-    run(["ffmpeg", "-y", "-loglevel", "error", "-i", bruto, "-filter_complex", filtro,
-         "-map", "[v]", "-map", "0:a?", "-r", "30", "-c:v", "libx264", "-preset", "veryfast",
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", fonte, "-filter_complex", filtro,
+         "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
          "-crf", "21", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
          "-movflags", "+faststart", final])
     return final
@@ -455,7 +540,7 @@ def main():
     duracao = float(info.get("duration") or 1e9)
 
     if a.trechos:
-        cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1])}
+        cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1]), "chamada": env("CHAMADA")}
                   for x in a.trechos.split(",")]
     else:
         segs = ler_json3()

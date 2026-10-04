@@ -45,6 +45,7 @@ jobs:
       PUBLICAR: ${{ github.event.client_payload.publicar || inputs.publicar || 'nao' }}
       PRIVACIDADE: ${{ github.event.client_payload.privacidade || inputs.privacidade || 'private' }}
       FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'auto' }}
+      MARCA_DAGUA: ${{ vars.MARCA_DAGUA || '@canalimpulsoreal' }}
       HORARIOS: ${{ github.event.client_payload.horarios || inputs.horarios }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
       CALLBACK_URL: ${{ github.event.client_payload.callback_url || vars.CALLBACK_URL }}
