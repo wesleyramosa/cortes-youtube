@@ -2,7 +2,7 @@ name: agenda
 
 on:
   schedule:
-    - cron: "30 3 * * *"   # 00h30 em Brasília: prepara e agenda os cortes do dia
+    - cron: "10 8 * * *"   # 05h10 em Brasília, logo após a cota do YouTube zerar (meia-noite do Pacífico)
   workflow_dispatch:
 
 permissions:

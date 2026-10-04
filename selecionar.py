@@ -29,7 +29,7 @@ def proximos_horarios():
         for hhmm in CFG["horarios"]:
             h, m = map(int, hhmm.split(":"))
             quando = datetime(dia.year, dia.month, dia.day, h, m, tzinfo=fuso)
-            if quando > agora + timedelta(minutes=45) and quando.isoformat() not in ocupados:
+            if quando > agora + timedelta(minutes=15) and quando.isoformat() not in ocupados:
                 livres.append(quando.isoformat())
     return livres[:len(CFG["horarios"])]
 
