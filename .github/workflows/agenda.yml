@@ -1,0 +1,50 @@
+name: agenda
+
+on:
+  schedule:
+    - cron: "0 12 * * *"   # 09h em Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: agenda
+
+jobs:
+  selecionar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: yt-dlp
+        run: pip install "yt-dlp[default]"
+
+      - name: Cookies do YouTube
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then printf '%s\n' "$YT_COOKIES" > cookies.txt; fi
+
+      - name: Escolher vídeos e disparar cortes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref_name }}
+        run: python selecionar.py
+
+      - name: Guardar vídeos já usados
+        run: |
+          git config user.name "agenda-cortes"
+          git config user.email "agenda-cortes@users.noreply.github.com"
+          git add processados.txt
+          git diff --cached --quiet || (git commit -m "Vídeos agendados $(date -u +%F)" && git push)

@@ -1,0 +1,13 @@
+{
+  "cortes_por_video": 2,
+  "publicar": "sim",
+  "privacidade": "public",
+  "formato": "auto",
+  "duracao_minima_s": 300,
+  "olhar_ultimos": 30,
+  "canais": [
+    {"nome": "Prazer, Karnal (Leandro Karnal)", "id": "UC4O2eKb8vI4VlMeNp90asfg", "tema": "filosofia, história e comportamento"},
+    {"nome": "Clóvis de Barros", "id": "UCPfEa4hhzVGOxt05mWKHvZQ", "tema": "filosofia, ética e reflexão sobre a vida"},
+    {"nome": "Canal do Cortella", "id": "UCyTS929PXJSUiBEFSzdypgg", "tema": "filosofia, carreira e sentido da vida"}
+  ]
+}
