@@ -1,5 +1,7 @@
 {
   "cortes_por_video": 2,
+  "horarios": ["06:00", "12:00", "15:00", "18:00", "20:00", "23:00"],
+  "fuso": "America/Sao_Paulo",
   "publicar": "sim",
   "privacidade": "public",
   "formato": "auto",

@@ -27,6 +27,9 @@ on:
         type: choice
         options: [auto, blur, crop]
         default: auto
+      horarios:
+        description: Horários de publicação (ISO, separados por vírgula), um por corte
+        default: ""
 
 concurrency:
   group: corte-${{ github.event.client_payload.video_id || inputs.video_id }}
@@ -42,6 +45,7 @@ jobs:
       PUBLICAR: ${{ github.event.client_payload.publicar || inputs.publicar || 'nao' }}
       PRIVACIDADE: ${{ github.event.client_payload.privacidade || inputs.privacidade || 'private' }}
       FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'auto' }}
+      HORARIOS: ${{ github.event.client_payload.horarios || inputs.horarios }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
       CALLBACK_URL: ${{ github.event.client_payload.callback_url || vars.CALLBACK_URL }}
       CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}

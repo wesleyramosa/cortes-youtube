@@ -2,7 +2,7 @@ name: agenda
 
 on:
   schedule:
-    - cron: "0 12 * * *"   # 09h em Brasília
+    - cron: "30 3 * * *"   # 00h30 em Brasília: prepara e agenda os cortes do dia
   workflow_dispatch:
 
 permissions:
@@ -46,5 +46,5 @@ jobs:
         run: |
           git config user.name "agenda-cortes"
           git config user.email "agenda-cortes@users.noreply.github.com"
-          git add processados.txt
+          git add processados.txt agendados.txt
           git diff --cached --quiet || (git commit -m "Vídeos agendados $(date -u +%F)" && git push)

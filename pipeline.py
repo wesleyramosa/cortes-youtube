@@ -369,7 +369,8 @@ def renderizar(video, corte, idioma, formato, nome):
 
 # ----------------------------------------------------------------- publicar
 
-def publicar(arquivo, titulo, descricao, tags, privacidade, idioma):
+def publicar(arquivo, titulo, descricao, tags, privacidade, idioma, publicar_em=""):
+    """Sobe o vídeo; com `publicar_em` (ISO 8601 futuro) o YouTube publica sozinho na hora."""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
@@ -384,6 +385,14 @@ def publicar(arquivo, titulo, descricao, tags, privacidade, idioma):
                     "categoryId": "22", "defaultLanguage": idioma},
         "status": {"privacyStatus": privacidade, "selfDeclaredMadeForKids": False},
     }
+    if publicar_em:
+        from datetime import datetime, timezone
+        quando = datetime.fromisoformat(publicar_em)
+        if quando > datetime.now(timezone.utc):
+            corpo["status"].update(privacyStatus="private", publishAt=quando.isoformat())
+            print(f"Agendado para {quando.isoformat()}", flush=True)
+        else:
+            print(f"Horário {publicar_em} já passou; publicando agora", flush=True)
     req = yt.videos().insert(part="snippet,status", body=corpo,
                              media_body=MediaFileUpload(str(arquivo), mimetype="video/mp4",
                                                         chunksize=-1, resumable=True))
@@ -431,6 +440,8 @@ def main():
     ap.add_argument("--formato", default=env("FORMATO", "auto"), choices=["auto", "blur", "crop"])
     ap.add_argument("--publicar", default=env("PUBLICAR", "nao"))
     ap.add_argument("--privacidade", default=env("PRIVACIDADE", "private"))
+    ap.add_argument("--horarios", default=env("HORARIOS"),
+                    help="horários ISO separados por vírgula, um por corte (publicação agendada)")
     ap.add_argument("--trechos", default="", help="ex.: 120-165,300-340 (pula o Gemini)")
     ap.add_argument("--cookies", default=env("COOKIES_FILE", "cookies.txt"))
     a = ap.parse_args()
@@ -463,7 +474,11 @@ def main():
         titulo, descricao, tags = montar_textos(corte, info, a.video_id)
         corte.update({"arquivo": arquivo.name, "titulo_final": titulo, "descricao_final": descricao})
         if a.publicar == "sim":
-            corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade, a.idioma)
+            horarios = [h.strip() for h in a.horarios.split(",") if h.strip()]
+            quando = horarios[i - 1] if i <= len(horarios) else ""
+            corte["publicar_em"] = quando
+            corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade,
+                                           a.idioma, quando)
             corte["youtube_url"] = f"https://youtube.com/shorts/{corte['youtube_id']}"
             print(f"Publicado: {corte['youtube_url']}", flush=True)
         else:
