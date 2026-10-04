@@ -389,6 +389,9 @@ def main():
             corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade, a.idioma)
             corte["youtube_url"] = f"https://youtube.com/shorts/{corte['youtube_id']}"
             print(f"Publicado: {corte['youtube_url']}", flush=True)
+        else:
+            print(f"Publicação desligada (publicar={a.publicar}); corte só salvo em Artifacts",
+                  flush=True)
         resultado["cortes"].append(corte)
 
     (SAIDA / "resultado.json").write_text(json.dumps(resultado, ensure_ascii=False, indent=2),

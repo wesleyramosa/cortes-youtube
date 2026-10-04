@@ -4,3 +4,4 @@ cookies.txt
 client_secret*.json
 .venv/
 __pycache__/
+SECRETS_YOUTUBE.txt
