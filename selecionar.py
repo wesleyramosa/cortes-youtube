@@ -21,7 +21,7 @@ feitos, ocupados = ler(FEITOS), ler(AGENDADOS)
 
 
 def proximos_horarios():
-    """Próximos horários livres (hoje e amanhã), com folga para o processamento."""
+    """Horários livres nas próximas 20h, com folga para o processamento."""
     fuso = ZoneInfo(CFG.get("fuso", "America/Sao_Paulo"))
     agora = datetime.now(fuso)
     livres = []
@@ -29,7 +29,9 @@ def proximos_horarios():
         for hhmm in CFG["horarios"]:
             h, m = map(int, hhmm.split(":"))
             quando = datetime(dia.year, dia.month, dia.day, h, m, tzinfo=fuso)
-            if quando > agora + timedelta(minutes=15) and quando.isoformat() not in ocupados:
+            # Só as próximas 20h: tentativas repetidas no mesmo dia não pegam horários de amanhã.
+            if (agora + timedelta(minutes=15) < quando < agora + timedelta(hours=20)
+                    and quando.isoformat() not in ocupados):
                 livres.append(quando.isoformat())
     return livres[:len(CFG["horarios"])]
 

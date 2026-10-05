@@ -2,7 +2,13 @@ name: agenda
 
 on:
   schedule:
-    - cron: "10 8 * * *"   # 05h10 em Brasília, logo após a cota do YouTube zerar (meia-noite do Pacífico)
+    # 05h17–06h47 em Brasília (após a cota do YouTube zerar à meia-noite do Pacífico).
+    # Várias tentativas porque o GitHub às vezes pula agendamentos; as extras não fazem nada
+    # quando os horários do dia já estão ocupados.
+    - cron: "17 8 * * *"
+    - cron: "47 8 * * *"
+    - cron: "17 9 * * *"
+    - cron: "47 9 * * *"
   workflow_dispatch:
 
 permissions:
