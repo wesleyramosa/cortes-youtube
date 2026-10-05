@@ -48,3 +48,25 @@ python pipeline.py --video-id jNQXAC9IVRw --trechos 0-18 --idioma en --dur-min 5
 - GitHub Actions: 2.000 min/mês em repositório privado (~5–8 min por corte).
 - YouTube Data API: 10.000 unidades/dia → ~6 uploads/dia (1.600 cada); cada busca do n8n gasta 100.
 - Gemini Flash gratuito: limite por minuto/dia; o script tenta de novo em caso de 429.
+
+---
+
+# Notícia → Vídeo (`noticia.yml` + `noticia.py`)
+
+E-mail de notícia → Gemini escreve o roteiro em cenas → **Cloudflare Workers AI (FLUX.1 schnell)** gera uma imagem por cena com contexto brasileiro → **Edge TTS** narra em pt-BR → ffmpeg monta o 9:16 com zoom lento e legenda palavra a palavra. Tudo grátis.
+
+Secrets extras: `CF_ACCOUNT_ID` e `CF_API_TOKEN` (Cloudflare › AI › Workers AI › *Use REST API* — token com permissão **Workers AI: Read/Edit**). Reaproveita `GEMINI_API_KEY`, `GROQ_API_KEY`, `YT_*` e `CALLBACK_TOKEN`.
+
+Variáveis opcionais: `VOZ` (`pt-BR-AntonioNeural`, `pt-BR-FranciscaNeural`, `pt-BR-ThalitaMultilingualNeural`), `VELOCIDADE` (`+10%`), `MARCA_NOTICIA` (marca d'água), `CF_MODELO`, `CALLBACK_URL_NOTICIA`.
+
+Disparo (o n8n faz isso — fluxo pronto para importar em `n8n/noticia-video.json`):
+
+```bash
+curl -X POST https://api.github.com/repos/DONO/cortes-youtube/dispatches \
+  -H "Authorization: Bearer GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+  -d '{"event_type":"noticia","client_payload":{"titulo":"...","texto":"...","url":"https://...","publicar":"nao","callback_url":"https://.../webhook/noticia-retorno"}}'
+```
+
+Teste local: `python noticia.py --titulo "..." --texto-arquivo noticia.txt` (ou `--roteiro roteiro.json` para pular o LLM). Sem as chaves da Cloudflare ele usa fundo liso no lugar das imagens. O vídeo sai em `saida/noticia.mp4` e as imagens ficam nos Artifacts do run.
+
+Limites: FLUX schnell gasta poucos neurons por imagem — os 10 mil/dia grátis dão para dezenas de imagens (~6 por vídeo). Cada vídeo leva ~3–5 min de Actions.

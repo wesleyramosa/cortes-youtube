@@ -1,0 +1,106 @@
+{
+  "name": "[19] Notícia → Vídeo (GitHub Actions)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "simple": false,
+        "filters": { "q": "label:noticias-video is:unread" },
+        "options": {}
+      },
+      "id": "a1",
+      "name": "Notícia chegou no Gmail",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            { "id": "c1", "name": "github_repo", "value": "wesleyramosa/cortes-youtube", "type": "string" },
+            { "id": "c2", "name": "publicar", "value": "nao", "type": "string" },
+            { "id": "c3", "name": "privacidade", "value": "private", "type": "string" },
+            { "id": "c4", "name": "cenas", "value": "6", "type": "string" },
+            { "id": "c5", "name": "voz", "value": "pt-BR-AntonioNeural", "type": "string" },
+            { "id": "c6", "name": "callback_url", "value": "https://wdoisaagencia.app.n8n.cloud/webhook/noticia-retorno", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2",
+      "name": "Configuração",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tira o texto limpo do e-mail e o primeiro link de matéria (fonte).\nconst saida = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const html = j.html || j.textAsHtml || '';\n  let texto = j.text || html.replace(/<style[\\s\\S]*?<\\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');\n  texto = texto.replace(/&nbsp;/g, ' ').replace(/https?:\\/\\/\\S+/g, ' ').replace(/\\s+/g, ' ').trim();\n  const links = [...html.matchAll(/href=\"(https?:[^\"]+)\"/gi)].map(m => m[1])\n    .filter(u => !/unsubscribe|descadastr|mailto|google\\.com\\/maps|facebook|instagram|twitter|x\\.com/i.test(u));\n  const titulo = (j.subject || '').replace(/^(fwd?|enc|res|re):\\s*/i, '').trim();\n  saida.push({ json: {\n    titulo,\n    texto: texto.slice(0, 12000),\n    url: links[0] || '',\n    email_id: j.id,\n    github_repo: j.github_repo, publicar: j.publicar, privacidade: j.privacidade,\n    cenas: j.cenas, voz: j.voz, callback_url: j.callback_url,\n  }});\n}\nreturn saida;"
+      },
+      "id": "a3",
+      "name": "Preparar notícia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.github_repo }}/dispatches",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_type: 'noticia', client_payload: { titulo: $json.titulo, texto: $json.texto, url: $json.url, cenas: $json.cenas, voz: $json.voz, publicar: $json.publicar, privacidade: $json.privacidade, callback_url: $json.callback_url } }) }}",
+        "options": {}
+      },
+      "id": "a4",
+      "name": "Gerar vídeo no GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "noticia-retorno",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "a5",
+      "name": "Vídeo pronto (retorno do GitHub)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 260],
+      "webhookId": "noticia-retorno"
+    },
+    {
+      "parameters": {
+        "content": "## Notícia → Vídeo\n1. Marque (ou crie um filtro que marque) os e-mails de notícia com o marcador **noticias-video**.\n2. O n8n manda título + texto para o GitHub Actions (`noticia.yml`), que gera roteiro (Gemini), imagens (Cloudflare FLUX), narração (Edge TTS) e o vídeo 9:16.\n3. Quando termina, o GitHub chama o webhook de baixo com `status`, `titulo`, `descricao`, `youtube_url` (se publicou) e `run_url` (onde baixar o MP4).\n\n**Credenciais:** no nó do GitHub use a mesma `GitHub Token (cortes)`; no webhook use a `Token retorno cortes`.\n\nPara publicar direto no YouTube mude `publicar` para `sim` na Configuração.",
+        "height": 300,
+        "width": 420
+      },
+      "id": "a6",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, -60]
+    }
+  ],
+  "connections": {
+    "Notícia chegou no Gmail": { "main": [[{ "node": "Configuração", "type": "main", "index": 0 }]] },
+    "Configuração": { "main": [[{ "node": "Preparar notícia", "type": "main", "index": 0 }]] },
+    "Preparar notícia": { "main": [[{ "node": "Gerar vídeo no GitHub", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

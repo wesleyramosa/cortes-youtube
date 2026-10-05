@@ -5,3 +5,4 @@ requests
 google-api-python-client
 google-auth
 opencv-python-headless<5
+edge-tts

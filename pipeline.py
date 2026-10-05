@@ -236,7 +236,8 @@ def limpa(p):
     return p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3):
+def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
+              final="SIGA PARA MAIS CORTES"):
     """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
     cab = f"""[Script Info]
 ScriptType: v4.00+
@@ -277,9 +278,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                       r"{\fscx80\fscy80\t(0,150,\fscx100\fscy100)}" + limpa(chamada))
     if marca:
         linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Marca,,0,0,0,,{marca}")
-    if duracao > 10:
+    if final and duracao > 10:
         linhas.append(f"Dialogue: 1,{ts(duracao - 2.5)},{ts(duracao)},Caixa,,0,0,0,,"
-                      r"{\fad(200,0)}SIGA PARA MAIS CORTES")
+                      r"{\fad(200,0)}" + limpa(final))
     Path(destino).write_text(cab + "\n".join(linhas) + "\n", encoding="utf-8")
 
 
