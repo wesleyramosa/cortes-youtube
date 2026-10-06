@@ -21,18 +21,17 @@ feitos, ocupados = ler(FEITOS), ler(AGENDADOS)
 
 
 def proximos_horarios():
-    """Horários livres nas próximas 20h, com folga para o processamento."""
+    """Horários livres ainda hoje, com folga para o processamento."""
     fuso = ZoneInfo(CFG.get("fuso", "America/Sao_Paulo"))
     agora = datetime.now(fuso)
     livres = []
-    for dia in (agora.date(), agora.date() + timedelta(days=1)):
-        for hhmm in CFG["horarios"]:
-            h, m = map(int, hhmm.split(":"))
-            quando = datetime(dia.year, dia.month, dia.day, h, m, tzinfo=fuso)
-            # Só as próximas 20h: tentativas repetidas no mesmo dia não pegam horários de amanhã.
-            if (agora + timedelta(minutes=15) < quando < agora + timedelta(hours=20)
-                    and quando.isoformat() not in ocupados):
-                livres.append(quando.isoformat())
+    dia = agora.date()
+    for hhmm in CFG["horarios"]:
+        h, m = map(int, hhmm.split(":"))
+        quando = datetime(dia.year, dia.month, dia.day, h, m, tzinfo=fuso)
+        # Só horários de hoje: os uploads caem no mesmo dia de cota do YouTube.
+        if quando > agora + timedelta(minutes=15) and quando.isoformat() not in ocupados:
+            livres.append(quando.isoformat())
     return livres[:len(CFG["horarios"])]
 
 
