@@ -54,7 +54,7 @@
       },
       "publicar": "sim",
       "privacidade": "public",
-      "formato": "auto",
+      "formato": "imagem",
       "duracao_minima_s": 300,
       "canais": [
         {

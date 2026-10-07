@@ -112,7 +112,7 @@ def transcrever(arquivo, idioma, palavras=False):
 
 # ------------------------------------------------------- escolha dos trechos
 
-def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma, longo=False):
+def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma, longo=False, imagens=()):
     if not (env("GEMINI_API_KEY") or env("GROQ_API_KEY")):
         sys.exit("Defina GEMINI_API_KEY ou GROQ_API_KEY (ou use --trechos para testar sem IA).")
     transcricao = "\n".join(f"[{s['ini']:.1f}-{s['fim']:.1f}] {s['txt']}" for s in segs)[:400_000]
@@ -138,6 +138,10 @@ Responda somente JSON neste formato:
 TRANSCRIÇÃO:
 {transcricao}"""
     else:
+        campo_imagem = ""
+        if imagens:
+            nomes = ", ".join(imagens)
+            campo_imagem = f'\n"imagem":"o arquivo, desta lista, que mais combina com o assunto: {nomes}",'
         prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
 Tema do canal: {tema or "geral"}
 Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
@@ -152,7 +156,7 @@ Priorize: opinião forte, revelação, história com desfecho, dica prática, hu
 
 Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
 {{"cortes":[{{"inicio":0.0,"fim":0.0,"nota":0,"gancho":"primeira frase do trecho","motivo":"por que viraliza",
-"chamada":"frase de impacto de 3 a 6 palavras para aparecer na tela, sem emojis",
+"chamada":"frase de impacto de 3 a 6 palavras para aparecer na tela, sem emojis",{campo_imagem}
 "titulo":"título chamativo em {IDIOMAS.get(idioma, idioma)}, até 70 caracteres",
 "descricao":"1 ou 2 frases em {IDIOMAS.get(idioma, idioma)}","hashtags":["sem #, até 5"]}}]}}
 
@@ -280,7 +284,7 @@ Style: Marca,DejaVu Sans,30,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0
 
 
 def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
-              final="SIGA PARA MAIS CORTES", horizontal=False):
+              final="SIGA PARA MAIS CORTES", horizontal=False, chamada_fixa=False):
     """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
     cab = f"""[Script Info]
 ScriptType: v4.00+
@@ -309,7 +313,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             linhas.append(f"Dialogue: 0,{ts(ini)},{ts(fim_ev)},Leg,,0,0,0,,{texto}")
 
     if chamada:  # título-gancho com leve "pop" de entrada
-        linhas.append(f"Dialogue: 1,{ts(0)},{ts(min(3.5, duracao))},Caixa,,0,0,0,,"
+        fim_chamada = duracao if chamada_fixa else min(3.5, duracao)
+        linhas.append(f"Dialogue: 1,{ts(0)},{ts(fim_chamada)},Caixa,,0,0,0,,"
                       r"{\fscx80\fscy80\t(0,150,\fscx100\fscy100)}" + limpa(chamada))
     if marca:
         linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Marca,,0,0,0,,{marca}")
@@ -475,8 +480,11 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
     fonte, palavras, dur = cortar_silencios(str(bruto), palavras, TRAB / f"{nome}_seco.mp4")
 
     ass = TRAB / f"{nome}.ass"
+    imagem = corte.get("imagem_arquivo")
+    if formato == "imagem" and imagem:
+        return renderizar_imagem(fonte, palavras, dur, corte, nome, imagem, ass)
     gerar_ass(palavras, ass, dur, chamada=corte.get("chamada", ""), marca=env("MARCA_DAGUA"))
-    filtro = (f"{enquadrar(fonte, formato)};"
+    filtro = (f"{enquadrar(fonte, 'auto' if formato == 'imagem' else formato)};"
               f"[f]fps=30,zoompan=z='{zoom_por_frase(palavras)}'"
               ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30,"
               "eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5,"
@@ -488,6 +496,34 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
          "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
          "-crf", "21", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
          "-movflags", "+faststart", final])
+    return final
+
+
+def renderizar_imagem(fonte, palavras, dur, corte, nome, imagem, ass):
+    """Imagem temática no topo (com o título), vídeo horizontal inteiro no meio e
+    legenda embaixo sobre o fundo desfocado do próprio vídeo."""
+    gerar_ass(palavras, ass, dur, chamada=corte.get("chamada", ""), marca=env("MARCA_DAGUA"),
+              chamada_fixa=True)
+    # Título colado no topo da imagem e legenda logo abaixo do vídeo.
+    texto = ass.read_text(encoding="utf-8")
+    texto = texto.replace(",8,90,90,250,1", ",8,90,90,60,1").replace(",2,70,70,480,1", ",2,70,70,400,1")
+    ass.write_text(texto, encoding="utf-8")
+    alt_img, y_video = 660, 660
+    filtro = ("[0:v]split[a][b];"
+              "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+              "boxblur=30:3,eq=brightness=-0.18[fundo];"
+              f"[1:v]scale=1080:{alt_img}:force_original_aspect_ratio=increase,"
+              f"crop=1080:{alt_img},setsar=1[img];"
+              "[b]scale=1080:-2,eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5[vid];"
+              "[fundo][img]overlay=0:0:shortest=1[c1];"
+              f"[c1][vid]overlay=0:{y_video},fps=30,ass={ass.as_posix()}[t];"
+              "color=c=0xFFD400:s=1080x10:r=30[barra];"
+              f"[t][barra]overlay=x='-w+w*t/{max(dur, 1):.2f}':y=H-h:shortest=1[v]")
+    final = SAIDA / f"{nome}.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", fonte, "-loop", "1", "-i", imagem,
+         "-filter_complex", filtro, "-map", "[v]", "-map", "0:a?", "-t", f"{dur:.2f}",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", final])
     return final
 
 
@@ -634,7 +670,8 @@ def main():
     ap.add_argument("--dur-min", type=int, default=int(env("DUR_MIN", "20")))
     ap.add_argument("--dur-max", type=int, default=int(env("DUR_MAX", "58")))
     ap.add_argument("--idioma", default=env("IDIOMA", "pt"))
-    ap.add_argument("--formato", default=env("FORMATO", "auto"), choices=["auto", "blur", "crop"])
+    ap.add_argument("--formato", default=env("FORMATO", "auto"),
+                    choices=["auto", "blur", "crop", "imagem"])
     ap.add_argument("--publicar", default=env("PUBLICAR", "nao"))
     ap.add_argument("--privacidade", default=env("PRIVACIDADE", "private"))
     ap.add_argument("--horarios", default=env("HORARIOS"),
@@ -657,6 +694,12 @@ def main():
         video, info = baixar(a.video_id, a.cookies)
     duracao = float(info.get("duration") or 1e9)
 
+    # Formato imagem: fotos do perfil em imagens/<perfil>/ (nome do arquivo descreve a cena).
+    pasta = Path("imagens") / env("PERFIL", "impulsoreal")
+    imagens = sorted(f for f in pasta.glob("*") if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")) \
+        if a.formato == "imagem" else []
+    if a.formato == "imagem" and not imagens:
+        print(f"Formato imagem sem fotos em {pasta}; usando enquadramento automático", flush=True)
     if a.trechos:
         cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1]), "chamada": env("CHAMADA")}
                   for x in a.trechos.split(",")]
@@ -667,7 +710,7 @@ def main():
             print("Sem legenda — transcrevendo o vídeo inteiro com Whisper", flush=True)
             segs = transcrever(video, a.idioma)
         cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max,
-                                  a.idioma, longo)
+                                  a.idioma, longo, [f.name for f in imagens])
 
     resultado = {"status": "ok", "video_id": a.video_id, "tema": a.tema,
                  "video_titulo": info.get("title"), "canal": info.get("channel"),
@@ -678,6 +721,12 @@ def main():
         # Cada corte é independente: um erro não derruba os outros (antes perdia os dois).
         try:
             corte = ajustar(corte, duracao, a.dur_min, a.dur_max)
+            if imagens:
+                por_nome = {f.name: f for f in imagens}
+                escolhida = por_nome.get(str(corte.get("imagem", "")).strip()) \
+                    or imagens[(i + len(segs if not a.trechos else [])) % len(imagens)]
+                corte["imagem_arquivo"] = str(escolhida)
+                print(f"Imagem do corte {i}: {escolhida.name}", flush=True)
             arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}", longo)
             titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
             corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
