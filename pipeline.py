@@ -141,7 +141,7 @@ TRANSCRIÇÃO:
         campo_imagem = ""
         if imagens:
             nomes = ", ".join(imagens)
-            campo_imagem = f'\n"imagem":"o arquivo, desta lista, que mais combina com o assunto: {nomes}",'
+            campo_imagem = f'\n"imagem":"o arquivo, desta lista, que combina de verdade com o assunto, ou nenhuma se nenhum combinar: {nomes}",'
         prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
 Tema do canal: {tema or "geral"}
 Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
@@ -480,8 +480,12 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
     fonte, palavras, dur = cortar_silencios(str(bruto), palavras, TRAB / f"{nome}_seco.mp4")
 
     ass = TRAB / f"{nome}.ass"
-    imagem = corte.get("imagem_arquivo")
-    if formato == "imagem" and imagem:
+    if formato == "imagem":
+        imagem = corte.get("imagem_arquivo")
+        if not imagem:  # nenhuma foto combinou: usa um quadro do meio do próprio corte
+            imagem = str(TRAB / f"{nome}_topo.jpg")
+            run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{dur * 0.5:.2f}", "-i", fonte,
+                 "-frames:v", "1", "-q:v", "2", imagem])
         return renderizar_imagem(fonte, palavras, dur, corte, nome, imagem, ass)
     gerar_ass(palavras, ass, dur, chamada=corte.get("chamada", ""), marca=env("MARCA_DAGUA"))
     filtro = (f"{enquadrar(fonte, 'auto' if formato == 'imagem' else formato)};"
@@ -699,7 +703,7 @@ def main():
     imagens = sorted(f for f in pasta.glob("*") if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")) \
         if a.formato == "imagem" else []
     if a.formato == "imagem" and not imagens:
-        print(f"Formato imagem sem fotos em {pasta}; usando enquadramento automático", flush=True)
+        print(f"Formato imagem sem fotos em {pasta}; o topo usa um quadro do próprio vídeo", flush=True)
     if a.trechos:
         cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1]), "chamada": env("CHAMADA")}
                   for x in a.trechos.split(",")]
@@ -723,10 +727,11 @@ def main():
             corte = ajustar(corte, duracao, a.dur_min, a.dur_max)
             if imagens:
                 por_nome = {f.name: f for f in imagens}
-                escolhida = por_nome.get(str(corte.get("imagem", "")).strip()) \
-                    or imagens[(i + len(segs if not a.trechos else [])) % len(imagens)]
-                corte["imagem_arquivo"] = str(escolhida)
-                print(f"Imagem do corte {i}: {escolhida.name}", flush=True)
+                escolhida = por_nome.get(str(corte.get("imagem", "")).strip())
+                # Sem foto que combine, o topo usa um quadro do próprio vídeo (ver renderizar).
+                corte["imagem_arquivo"] = str(escolhida) if escolhida else ""
+                print(f"Imagem do corte {i}: {escolhida.name if escolhida else 'quadro do vídeo'}",
+                      flush=True)
             arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}", longo)
             titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
             corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
