@@ -25,7 +25,7 @@ on:
         default: private
       formato:
         type: choice
-        options: [auto, blur, crop]
+        options: [auto, blur, crop, imagem]
         default: auto
       tipo:
         type: choice
