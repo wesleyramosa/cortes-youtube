@@ -27,6 +27,10 @@ on:
         type: choice
         options: [auto, blur, crop]
         default: auto
+      tipo:
+        type: choice
+        options: [curto, longo]
+        default: curto
       horarios:
         description: Horários de publicação (ISO, separados por vírgula), um por corte
         default: ""
@@ -37,7 +41,7 @@ concurrency:
 jobs:
   corte:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       VIDEO_ID: ${{ github.event.client_payload.video_id || inputs.video_id }}
       TEMA: ${{ github.event.client_payload.tema || inputs.tema }}
@@ -46,6 +50,7 @@ jobs:
       PRIVACIDADE: ${{ github.event.client_payload.privacidade || inputs.privacidade || 'private' }}
       FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'auto' }}
       MARCA_DAGUA: ${{ vars.MARCA_DAGUA || '@canalimpulsoreal' }}
+      TIPO: ${{ github.event.client_payload.tipo || inputs.tipo || 'curto' }}
       HORARIOS: ${{ github.event.client_payload.horarios || inputs.horarios }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
       CALLBACK_URL: ${{ github.event.client_payload.callback_url || vars.CALLBACK_URL }}

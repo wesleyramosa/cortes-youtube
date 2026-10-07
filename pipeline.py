@@ -112,15 +112,37 @@ def transcrever(arquivo, idioma, palavras=False):
 
 # ------------------------------------------------------- escolha dos trechos
 
-def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma):
+def escolher_trechos(segs, info, tema, n, dmin, dmax, idioma, longo=False):
     if not (env("GEMINI_API_KEY") or env("GROQ_API_KEY")):
         sys.exit("Defina GEMINI_API_KEY ou GROQ_API_KEY (ou use --trechos para testar sem IA).")
     transcricao = "\n".join(f"[{s['ini']:.1f}-{s['fim']:.1f}] {s['txt']}" for s in segs)[:400_000]
-    prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
+    lingua = IDIOMAS.get(idioma, idioma)
+    if longo:
+        prompt = f"""Você é editor de vídeos para YouTube (formato horizontal, vídeo normal).
 Tema do canal: {tema or "geral"}
 Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
 
-Abaixo está a transcrição com tempos em segundos. Escolha os {n} melhores trechos (notas de 0 a 100) que:
+Abaixo está a transcrição com tempos em segundos. Escolha o MELHOR trecho único que:
+- dure entre {dmin} e {dmax} segundos;
+- trate de UM tema completo, com começo, desenvolvimento e conclusão;
+- comece com uma frase forte e termine numa frase completa.
+Divida o trecho em 3 a 6 capítulos (tempos em segundos do vídeo original, o primeiro igual ao início).
+
+Responda somente JSON neste formato:
+{{"cortes":[{{"inicio":0.0,"fim":0.0,"nota":0,"motivo":"por que prende a atenção",
+"chamada":"frase de impacto de 3 a 6 palavras para a miniatura e a abertura, sem emojis",
+"titulo":"título chamativo em {lingua}, até 80 caracteres",
+"descricao":"2 ou 3 frases em {lingua} resumindo o vídeo","hashtags":["sem #, até 5"],
+"capitulos":[{{"inicio":0.0,"titulo":"título curto do capítulo"}}]}}]}}
+
+TRANSCRIÇÃO:
+{transcricao}"""
+    else:
+        prompt = f"""Você é editor de cortes virais para YouTube Shorts, Reels e TikTok.
+Tema do canal: {tema or "geral"}
+Vídeo original: "{info.get('title', '')}" ({info.get('channel', '')})
+
+Abaixo está a transcrição com tempos em segundos. Escolha os {n + 1} melhores trechos (notas de 0 a 100) que:
 - sejam AUTOCONTIDOS (façam sentido para quem não viu o vídeo);
 - durem entre {dmin} e {dmax} segundos;
 - comecem com um gancho forte já nos primeiros 3 segundos;
@@ -236,12 +258,7 @@ def limpa(p):
     return p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
-              final="SIGA PARA MAIS CORTES"):
-    """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
-    cab = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
+ESTILOS_V = f"""PlayResX: 1080
 PlayResY: 1920
 WrapStyle: 0
 
@@ -249,7 +266,25 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Leg,DejaVu Sans,80,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,70,70,480,1
 Style: Caixa,DejaVu Sans,66,&H00000000,&H00000000,{AMARELO[:-1]},&H00000000,-1,0,0,0,100,100,0,0,3,16,0,8,90,90,250,1
-Style: Marca,DejaVu Sans,34,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,2,40,40,60,1
+Style: Marca,DejaVu Sans,34,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,2,40,40,60,1"""
+
+ESTILOS_H = f"""PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Leg,DejaVu Sans,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,200,200,70,1
+Style: Caixa,DejaVu Sans,54,&H00000000,&H00000000,{AMARELO[:-1]},&H00000000,-1,0,0,0,100,100,0,0,3,14,0,8,200,200,60,1
+Style: Marca,DejaVu Sans,30,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,3,40,40,30,1"""
+
+
+def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
+              final="SIGA PARA MAIS CORTES", horizontal=False):
+    """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
+    cab = f"""[Script Info]
+ScriptType: v4.00+
+{ESTILOS_H if horizontal else ESTILOS_V}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -427,13 +462,16 @@ def filtro_segue_rosto(arquivo):
 
 # ------------------------------------------------------------------ render
 
-def renderizar(video, corte, idioma, formato, nome):
+def renderizar(video, corte, idioma, formato, nome, longo=False):
     bruto = TRAB / f"{nome}_bruto.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{corte['inicio']:.2f}", "-i", video,
          "-t", f"{corte['fim'] - corte['inicio']:.2f}", "-c:v", "libx264", "-preset", "veryfast",
          "-crf", "18", "-c:a", "aac", "-b:a", "160k", bruto])
 
     palavras = transcrever(str(bruto), idioma, palavras=True)
+    if longo:  # vídeo longo mantém o ritmo original (e os capítulos batem com o tempo)
+        fonte, dur = str(bruto), duracao_de(str(bruto))
+        return renderizar_longo(fonte, palavras, dur, corte, nome)
     fonte, palavras, dur = cortar_silencios(str(bruto), palavras, TRAB / f"{nome}_seco.mp4")
 
     ass = TRAB / f"{nome}.ass"
@@ -453,9 +491,54 @@ def renderizar(video, corte, idioma, formato, nome):
     return final
 
 
+def renderizar_longo(fonte, palavras, dur, corte, nome):
+    """Vídeo horizontal 16:9: legenda na base, gancho na abertura, zoom suave, miniatura."""
+    ass = TRAB / f"{nome}.ass"
+    gerar_ass(palavras, ass, dur, chamada=corte.get("chamada", ""), marca=env("MARCA_DAGUA"),
+              max_palavras=4, final="INSCREVA-SE PARA MAIS", horizontal=True)
+    filtro = ("[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+              "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+              f"zoompan=z='{zoom_por_frase(palavras, nivel=0.06, max_frase=8.0)}'"
+              ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,"
+              "eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5,"
+              f"ass={ass.as_posix()}[v]")
+    final = SAIDA / f"{nome}.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", fonte, "-filter_complex", filtro,
+         "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", "21", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+         "-movflags", "+faststart", final])
+    gerar_miniatura(fonte, dur, corte.get("chamada") or corte.get("titulo", ""), nome)
+    return final
+
+
+def gerar_miniatura(fonte, dur, texto, nome):
+    """Miniatura 1280x720: quadro do vídeo com a frase de impacto em letras grandes."""
+    ass = TRAB / f"{nome}_mini.ass"
+    ass.write_text(f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Mini,DejaVu Sans,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,9,4,2,60,60,50,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:10.00,Mini,,0,0,0,,{limpa(texto)}
+""", encoding="utf-8")
+    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{dur * 0.3:.2f}", "-i", fonte,
+         "-frames:v", "1", "-vf",
+         "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,"
+         f"eq=contrast=1.15:saturation=1.3,ass={ass.as_posix()}",
+         "-q:v", "2", SAIDA / f"{nome}.jpg"])
+
+
 # ----------------------------------------------------------------- publicar
 
-def publicar(arquivo, titulo, descricao, tags, privacidade, idioma, publicar_em=""):
+def publicar(arquivo, titulo, descricao, tags, privacidade, idioma, publicar_em="",
+             miniatura=None):
     """Sobe o vídeo; com `publicar_em` (ISO 8601 futuro) o YouTube publica sozinho na hora."""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
@@ -485,16 +568,38 @@ def publicar(arquivo, titulo, descricao, tags, privacidade, idioma, publicar_em=
     resp = None
     while resp is None:
         _, resp = req.next_chunk()
+    if miniatura and Path(miniatura).exists():
+        try:  # exige canal verificado por telefone; sem isso o YouTube recusa
+            yt.thumbnails().set(videoId=resp["id"], media_body=MediaFileUpload(
+                str(miniatura), mimetype="image/jpeg")).execute()
+            print("Miniatura enviada", flush=True)
+        except Exception as e:
+            print(f"Miniatura não enviada (canal verificado?): {e}", flush=True)
     return resp["id"]
 
 
-def montar_textos(corte, info, video_id):
+def capitulos(corte):
+    """Capítulos do YouTube: precisam começar em 00:00, ter 3+ itens e 10s+ cada."""
+    caps = corte.get("capitulos") or []
+    lista, ultimo = [], -999.0
+    for c in sorted(caps, key=lambda c: float(c.get("inicio", 0))):
+        rel = max(0.0, float(c.get("inicio", 0)) - corte["inicio"])
+        if not lista:
+            rel = 0.0
+        if rel - ultimo >= 10 and rel < corte["fim"] - corte["inicio"] - 10:
+            m, sg = divmod(int(rel), 60)
+            lista.append(f"{m:02d}:{sg:02d} {c.get('titulo', '').strip()}")
+            ultimo = rel
+    return ("Capítulos:\n" + "\n".join(lista) + "\n\n") if len(lista) >= 3 else ""
+
+
+def montar_textos(corte, info, video_id, longo=False):
     titulo = corte.get("titulo") or info.get("title", "")
-    if len(titulo) <= 90:
+    if not longo and len(titulo) <= 90:
         titulo += " #shorts"
     tags = [h.lstrip("#").replace(" ", "") for h in corte.get("hashtags", []) if h]
     licenca = info.get("license") or ""
-    descricao = (f"{corte.get('descricao', '')}\n\n"
+    descricao = (f"{corte.get('descricao', '')}\n\n" + capitulos(corte)
                  + " ".join(f"#{t}" for t in tags)
                  + f"\n\nTrecho de: {info.get('title', '')} — {info.get('channel', '')}\n"
                  f"https://youtu.be/{video_id}"
@@ -530,7 +635,13 @@ def main():
                     help="horários ISO separados por vírgula, um por corte (publicação agendada)")
     ap.add_argument("--trechos", default="", help="ex.: 120-165,300-340 (pula o Gemini)")
     ap.add_argument("--cookies", default=env("COOKIES_FILE", "cookies.txt"))
+    ap.add_argument("--tipo", default=env("TIPO", "curto"), choices=["curto", "longo"])
     a = ap.parse_args()
+    longo = a.tipo == "longo"
+    if longo:  # trecho de 4 a 10 min, um só por vídeo
+        a.num_cortes = 1
+        a.dur_min = int(env("DUR_MIN_LONGO", "240"))
+        a.dur_max = int(env("DUR_MAX_LONGO", "600"))
 
     SAIDA.mkdir(exist_ok=True)
     TRAB.mkdir(exist_ok=True)
@@ -549,33 +660,49 @@ def main():
         if not segs:
             print("Sem legenda — transcrevendo o vídeo inteiro com Whisper", flush=True)
             segs = transcrever(video, a.idioma)
-        cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max, a.idioma)
+        cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max,
+                                  a.idioma, longo)
 
     resultado = {"status": "ok", "video_id": a.video_id, "tema": a.tema,
                  "video_titulo": info.get("title"), "canal": info.get("channel"),
                  "run_url": env("RUN_URL"), "cortes": []}
+    horarios = [h.strip() for h in a.horarios.split(",") if h.strip()]
+    falhas = []
     for i, corte in enumerate(cortes, 1):
-        corte = ajustar(corte, duracao, a.dur_min, a.dur_max)
-        arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}")
-        titulo, descricao, tags = montar_textos(corte, info, a.video_id)
-        corte.update({"arquivo": arquivo.name, "titulo_final": titulo, "descricao_final": descricao})
-        if a.publicar == "sim":
-            horarios = [h.strip() for h in a.horarios.split(",") if h.strip()]
-            quando = horarios[i - 1] if i <= len(horarios) else ""
-            corte["publicar_em"] = quando
-            corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade,
-                                           a.idioma, quando)
-            corte["youtube_url"] = f"https://youtube.com/shorts/{corte['youtube_id']}"
-            print(f"Publicado: {corte['youtube_url']}", flush=True)
-        else:
-            print(f"Publicação desligada (publicar={a.publicar}); corte só salvo em Artifacts",
-                  flush=True)
+        # Cada corte é independente: um erro não derruba os outros (antes perdia os dois).
+        try:
+            corte = ajustar(corte, duracao, a.dur_min, a.dur_max)
+            arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}", longo)
+            titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
+            corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
+                          "descricao_final": descricao})
+            if a.publicar == "sim":
+                quando = horarios[i - 1] if i <= len(horarios) else ""
+                corte["publicar_em"] = quando
+                corte["youtube_id"] = publicar(arquivo, titulo, descricao, tags, a.privacidade,
+                                               a.idioma, quando,
+                                               SAIDA / f"corte_{i}.jpg" if longo else None)
+                base = "https://youtu.be/" if longo else "https://youtube.com/shorts/"
+                corte["youtube_url"] = base + corte["youtube_id"]
+                print(f"Publicado: {corte['youtube_url']}", flush=True)
+            else:
+                print(f"Publicação desligada (publicar={a.publicar}); corte só salvo em Artifacts",
+                      flush=True)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            corte["erro"] = str(e)
+            falhas.append(i)
         resultado["cortes"].append(corte)
+    if falhas:
+        resultado["status"] = "parcial"
 
     (SAIDA / "resultado.json").write_text(json.dumps(resultado, ensure_ascii=False, indent=2),
                                           encoding="utf-8")
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
     avisar(env("CALLBACK_URL"), resultado)
+    if falhas:  # deixa a execução vermelha para o GitHub avisar por e-mail
+        sys.exit(f"Falharam os cortes {falhas}")
 
 
 if __name__ == "__main__":

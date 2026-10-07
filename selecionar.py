@@ -55,6 +55,45 @@ def candidatos(canal):
     return sorted(ok, key=lambda v: v.get("view_count") or 0, reverse=True)
 
 
+def disparar(canal, video_id, slots, tipo="curto"):
+    subprocess.run(["gh", "workflow", "run", "corte.yml", "--ref", os.environ.get("REF", "main"),
+                    "-f", f"video_id={video_id}", "-f", f"tema={canal['tema']}",
+                    "-f", f"num_cortes={len(slots)}", "-f", f"horarios={','.join(slots)}",
+                    "-f", f"publicar={CFG['publicar']}", "-f", f"privacidade={CFG['privacidade']}",
+                    "-f", f"formato={CFG['formato']}", "-f", f"tipo={tipo}"], check=True)
+    feitos.add(video_id)
+    ocupados.update(slots)
+    print(f"Disparado {tipo} {video_id} para {slots}")
+
+
+def agendar_longo():
+    """Um vídeo longo por dia, alternando o canal de origem a cada dia."""
+    cfg = CFG.get("longo")
+    if not cfg:
+        return
+    fuso = ZoneInfo(CFG.get("fuso", "America/Sao_Paulo"))
+    agora = datetime.now(fuso)
+    h, m = map(int, cfg["horario"].split(":"))
+    quando = datetime(agora.year, agora.month, agora.day, h, m, tzinfo=fuso)
+    if quando <= agora + timedelta(minutes=60) or quando.isoformat() in ocupados:
+        return
+    canais = CFG["canais"]
+    for k in range(len(canais)):
+        canal = canais[(agora.toordinal() + k) % len(canais)]
+        longos = [v for v in candidatos(canal)
+                  if (v.get("duration") or 0) >= cfg["duracao_minima_origem_s"]]
+        if longos:
+            v = longos[0]
+            print(f"[longo] [{canal['nome']}] {v['id']} — {v.get('title')}")
+            if not os.environ.get("DRY_RUN"):
+                disparar(canal, v["id"], [quando.isoformat()], "longo")
+            else:
+                feitos.add(v["id"])
+            return
+    print("[longo] nenhum vídeo de origem longo disponível")
+
+
+agendar_longo()
 horarios = proximos_horarios()
 por_video = CFG["cortes_por_video"]
 precisa = math.ceil(len(horarios) / por_video)
@@ -78,14 +117,7 @@ for k, (canal, video_id) in enumerate(escolhidos):
     meus = horarios[k * por_video:(k + 1) * por_video]
     if not meus:
         break
-    subprocess.run(["gh", "workflow", "run", "corte.yml", "--ref", os.environ.get("REF", "main"),
-                    "-f", f"video_id={video_id}", "-f", f"tema={canal['tema']}",
-                    "-f", f"num_cortes={len(meus)}", "-f", f"horarios={','.join(meus)}",
-                    "-f", f"publicar={CFG['publicar']}", "-f", f"privacidade={CFG['privacidade']}",
-                    "-f", f"formato={CFG['formato']}"], check=True)
-    feitos.add(video_id)
-    ocupados.update(meus)
-    print(f"Disparado {video_id} para {meus}")
+    disparar(canal, video_id, meus)
 
 FEITOS.write_text("\n".join(sorted(feitos)) + "\n", encoding="utf-8")
 AGENDADOS.write_text("\n".join(sorted(ocupados)) + "\n", encoding="utf-8")
