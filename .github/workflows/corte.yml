@@ -31,6 +31,10 @@ on:
         type: choice
         options: [curto, longo]
         default: curto
+      perfil:
+        type: choice
+        options: [impulsoreal, neoncaos]
+        default: impulsoreal
       horarios:
         description: Horários de publicação (ISO, separados por vírgula), um por corte
         default: ""
@@ -49,7 +53,8 @@ jobs:
       PUBLICAR: ${{ github.event.client_payload.publicar || inputs.publicar || 'nao' }}
       PRIVACIDADE: ${{ github.event.client_payload.privacidade || inputs.privacidade || 'private' }}
       FORMATO: ${{ github.event.client_payload.formato || inputs.formato || 'auto' }}
-      MARCA_DAGUA: ${{ vars.MARCA_DAGUA || '@canalimpulsoreal' }}
+      PERFIL: ${{ github.event.client_payload.perfil || inputs.perfil || 'impulsoreal' }}
+      MARCA_DAGUA: ${{ (github.event.client_payload.perfil || inputs.perfil) == 'neoncaos' && '@neoncaos' || '@canalimpulsoreal' }}
       TIPO: ${{ github.event.client_payload.tipo || inputs.tipo || 'curto' }}
       HORARIOS: ${{ github.event.client_payload.horarios || inputs.horarios }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
@@ -62,8 +67,11 @@ jobs:
       GROQ_MODEL: ${{ vars.GROQ_MODEL || 'llama-3.3-70b-versatile' }}
       WHISPER_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
       YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_ID_NEONCAOS: ${{ secrets.YT_CLIENT_ID_NEONCAOS }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_CLIENT_SECRET_NEONCAOS: ${{ secrets.YT_CLIENT_SECRET_NEONCAOS }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      YT_REFRESH_TOKEN_NEONCAOS: ${{ secrets.YT_REFRESH_TOKEN_NEONCAOS }}
     steps:
       - uses: actions/checkout@v4
 

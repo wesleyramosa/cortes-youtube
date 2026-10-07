@@ -6,3 +6,4 @@ client_secret*.json
 __pycache__/
 SECRETS_YOUTUBE.txt
 CANAL_AUTORIZADO.txt
+SECRETS_*.txt

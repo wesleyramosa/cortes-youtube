@@ -544,9 +544,15 @@ def publicar(arquivo, titulo, descricao, tags, privacidade, idioma, publicar_em=
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
 
-    creds = Credentials(None, refresh_token=env("YT_REFRESH_TOKEN"),
+    # Cada perfil (canal de destino) tem as próprias chaves; nunca cai nas de outro canal.
+    perfil = env("PERFIL", "impulsoreal")
+    sufixo = "" if perfil == "impulsoreal" else f"_{perfil.upper()}"
+    chaves = {k: env(f"{k}{sufixo}") for k in ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN")}
+    if not all(chaves.values()):
+        raise RuntimeError(f"Faltam os secrets YT_*{sufixo} do perfil {perfil}")
+    creds = Credentials(None, refresh_token=chaves["YT_REFRESH_TOKEN"],
                         token_uri="https://oauth2.googleapis.com/token",
-                        client_id=env("YT_CLIENT_ID"), client_secret=env("YT_CLIENT_SECRET"),
+                        client_id=chaves["YT_CLIENT_ID"], client_secret=chaves["YT_CLIENT_SECRET"],
                         scopes=["https://www.googleapis.com/auth/youtube.upload"])
     yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
     corpo = {
