@@ -89,7 +89,7 @@ def agendar_longo(perfil):
     cfg = perfil.get("longo")
     if not cfg:
         return
-    slot = livres(perfil, [cfg["horario"]], folga_min=60)
+    slot = livres(perfil, [cfg["horario"]], folga_min=40)
     if not slot:
         return
     canais = perfil["canais"]
