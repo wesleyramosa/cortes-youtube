@@ -37,11 +37,25 @@ def baixar(video_id, cookies):
     base = ["yt-dlp", "--no-playlist", "--no-warnings"]
     if cookies and Path(cookies).exists():
         base += ["--cookies", cookies]
-    run(base + [
-        "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
-        "--merge-output-format", "mp4", "--write-info-json",
-        "-o", str(TRAB / "video.%(ext)s"), url,
-    ])
+    # Sempre o áudio original (vídeos com dublagem automática têm várias faixas).
+    # O YouTube às vezes nega (403) o download DASH; aí tenta pelo HLS (m3u8).
+    tentativas = [
+        "bv*[height<=1080][ext=mp4]+ba[ext=m4a][format_note*=original]"
+        "/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+        "bv*[protocol^=m3u8][height<=1080]+ba[protocol^=m3u8][format_note*=original]"
+        "/b[protocol^=m3u8][height<=1080]/bv*[protocol^=m3u8][height<=1080]+ba[protocol^=m3u8]",
+    ]
+    for k, formato in enumerate(tentativas):
+        for velho in TRAB.glob("video.*"):
+            velho.unlink()
+        r = subprocess.run([str(c) for c in base + [
+            "-f", formato, "--merge-output-format", "mp4", "--write-info-json",
+            "--retries", "5", "-o", str(TRAB / "video.%(ext)s"), url]])
+        if r.returncode == 0 and (TRAB / "video.mp4").exists():
+            break
+        print(f"Download tentativa {k + 1} falhou; tentando outra forma", flush=True)
+    else:
+        raise RuntimeError(f"Não foi possível baixar {video_id}")
     info = json.loads((TRAB / "video.info.json").read_text(encoding="utf-8"))
 
     # Legendas em chamada separada: falha aqui não deve derrubar o pipeline.
