@@ -1,0 +1,97 @@
+name: achadinho
+
+on:
+  # Disparado pelo n8n: POST /repos/{dono}/{repo}/dispatches
+  # {"event_type":"achadinho","client_payload":{"produto":{...},"callback_url":"..."}}
+  repository_dispatch:
+    types: [achadinho]
+  # Disparo manual pela aba Actions, para testes
+  workflow_dispatch:
+    inputs:
+      produto:
+        description: 'JSON do produto: {"id","nome","preco","imagem","link","desconto","nota","vendidos"}'
+        required: true
+      publicar_yt:
+        type: choice
+        options: [nao, sim]
+        default: nao
+
+permissions:
+  contents: write  # para anexar o vídeo na release "achadinhos"
+
+concurrency:
+  group: achadinho-${{ github.run_id }}
+
+jobs:
+  achadinho:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PRODUTO: ${{ github.event.client_payload.produto && toJSON(github.event.client_payload.produto) || inputs.produto }}
+      NUM_CENAS: ${{ github.event.client_payload.cenas || '4' }}
+      VOZ_ACHADINHO: ${{ github.event.client_payload.voz || vars.VOZ_ACHADINHO || 'pt-BR-FranciscaNeural' }}
+      VELOCIDADE: ${{ vars.VELOCIDADE || '+10%' }}
+      USAR_NANO_BANANA: ${{ vars.USAR_NANO_BANANA || 'sim' }}
+      NANO_MODEL: ${{ vars.NANO_MODEL || 'gemini-3.1-flash-image' }}
+      MARCA_ACHADINHO: ${{ vars.MARCA_ACHADINHO }}
+      PUBLICAR_YT: ${{ github.event.client_payload.publicar_yt || inputs.publicar_yt || 'nao' }}
+      PRIVACIDADE: private
+      CALLBACK_URL: ${{ github.event.client_payload.callback_url || vars.CALLBACK_URL_ACHADINHO }}
+      CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-flash-latest' }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_MODEL: ${{ vars.GROQ_MODEL || 'llama-3.3-70b-versatile' }}
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      ARQUIVO: achadinho-${{ github.run_id }}.mp4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ffmpeg
+        run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+
+      - name: Dependências
+        run: pip install requests edge-tts google-api-python-client google-auth
+
+      - name: Gerar vídeo
+        run: python achadinho.py
+
+      - name: Anexar vídeo na release
+        run: |
+          gh release view achadinhos >/dev/null 2>&1 || \
+            gh release create achadinhos --title "Vídeos de achadinhos" --notes "Vídeos gerados automaticamente pelo achadinho.yml"
+          cp saida/achadinho.mp4 "$ARQUIVO"
+          gh release upload achadinhos "$ARQUIVO" --clobber
+
+      - name: Avisar n8n
+        if: env.CALLBACK_URL != ''
+        run: |
+          URL="${{ github.server_url }}/${{ github.repository }}/releases/download/achadinhos/$ARQUIVO"
+          jq --arg u "$URL" --arg n "$ARQUIVO" '. + {video_url:$u, video_arquivo:$n}' saida/achadinho.json > saida/callback.json
+          curl -sS --fail-with-body -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+            -H "x-token: $CALLBACK_TOKEN" --data @saida/callback.json
+
+      - name: Avisar falha ao n8n
+        if: failure() && env.CALLBACK_URL != ''
+        run: |
+          curl -sS -X POST "$CALLBACK_URL" -H "Content-Type: application/json" -H "x-token: $CALLBACK_TOKEN" \
+            -d "$(jq -n --arg r "$RUN_URL" '{status:"erro", run_url:$r}')" || true
+
+      - name: Guardar arquivos do run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: achadinho-${{ github.run_id }}
+          path: |
+            saida/achadinho.mp4
+            saida/achadinho.json
+            trabalho/achadinho/roteiro.json
+            trabalho/achadinho/nano_*.png
