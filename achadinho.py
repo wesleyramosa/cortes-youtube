@@ -156,6 +156,13 @@ def legenda_com_preco(palavras, destino, duracao, roteiro, preco):
     Path(destino).write_text(texto, encoding="utf-8")
 
 
+def _duracao(arquivo):
+    try:
+        return duracao_de(str(arquivo))
+    except ValueError:  # ffprobe devolve "N/A" quando não consegue medir
+        return 0.0
+
+
 def _ts(seg):
     cs = int(round(seg * 100))
     h, cs = divmod(cs, 360000)
@@ -174,8 +181,17 @@ def montar(roteiro, produto, foto, a):
         mp3, wav = TRAB / f"voz_{i}.mp3", TRAB / f"voz_{i}.wav"
         tempos = narrar(cena["fala"], a.voz, a.velocidade, mp3)
         pausa = 1.2 if i == len(cenas) - 1 else 0.2
-        dur = duracao_de(str(mp3)) + pausa
-        run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-af", "apad", "-t", f"{dur:.3f}",
+        # O mp3 do Edge não traz duração confiável no cabeçalho: decodifica para wav (medida
+        # exata) e tira o silêncio que sobra no fim, para o ritmo ficar ágil.
+        bruto = TRAB / f"voz_{i}_bruto.wav"
+        run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-af",
+             "areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1,areverse",
+             "-ar", "44100", "-ac", "2", bruto])
+        fala = _duracao(bruto) or _duracao(mp3)
+        if tempos:  # nunca menor que a última palavra narrada
+            fala = max(fala, tempos[-1][1] + 0.05)
+        dur = fala + pausa
+        run(["ffmpeg", "-y", "-loglevel", "error", "-i", bruto, "-af", "apad", "-t", f"{dur:.3f}",
              "-ar", "44100", "-ac", "2", wav])
         palavras += [(inicio + ini, inicio + fim, w) for ini, fim, w in tempos]
 
