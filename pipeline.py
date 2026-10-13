@@ -69,6 +69,52 @@ def baixar(video_id, cookies):
     return str(TRAB / "video.mp4"), info
 
 
+# ------------------------------------------------------------ Google Drive
+
+def drive_creds():
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    chaves = {k: env(k) for k in ("GD_CLIENT_ID", "GD_CLIENT_SECRET", "GD_REFRESH_TOKEN")}
+    if not all(chaves.values()):
+        raise RuntimeError("Faltam os secrets GD_CLIENT_ID / GD_CLIENT_SECRET / GD_REFRESH_TOKEN")
+    creds = Credentials(None, refresh_token=chaves["GD_REFRESH_TOKEN"],
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=chaves["GD_CLIENT_ID"], client_secret=chaves["GD_CLIENT_SECRET"],
+                        scopes=["https://www.googleapis.com/auth/drive"])
+    creds.refresh(Request())
+    return creds
+
+
+def baixar_drive(file_id, destino):
+    """Baixa um arquivo do Drive (em partes, aguenta vídeo de vários GB); devolve o nome original."""
+    cab = {"Authorization": f"Bearer {drive_creds().token}"}
+    base = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+    meta = requests.get(base, headers=cab, timeout=60,
+                        params={"fields": "name,mimeType", "supportsAllDrives": "true"})
+    meta.raise_for_status()
+    with requests.get(base, headers=cab, stream=True, timeout=600,
+                      params={"alt": "media", "supportsAllDrives": "true"}) as r:
+        r.raise_for_status()
+        with open(destino, "wb") as f:
+            for parte in r.iter_content(8 << 20):
+                f.write(parte)
+    nome = meta.json()["name"]
+    print(f"Drive: baixado {nome} ({Path(destino).stat().st_size / 1e6:.0f} MB)", flush=True)
+    return nome
+
+
+def subir_drive(arquivo, pasta, nome):
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    svc = build("drive", "v3", credentials=drive_creds(), cache_discovery=False)
+    feito = svc.files().create(
+        body={"name": nome, "parents": [pasta]}, supportsAllDrives=True, fields="id,webViewLink",
+        media_body=MediaFileUpload(str(arquivo), mimetype="video/mp4", chunksize=-1, resumable=True)
+    ).execute()
+    print(f"Drive: enviado {nome} → {feito['webViewLink']}", flush=True)
+    return feito["webViewLink"]
+
+
 def escolher_legenda(info):
     """Prefere legenda manual no idioma do vídeo; senão a automática original."""
     idioma = (info.get("language") or "").split("-")[0]
@@ -297,12 +343,33 @@ Style: Caixa,DejaVu Sans,54,&H00000000,&H00000000,{AMARELO[:-1]},&H00000000,-1,0
 Style: Marca,DejaVu Sans,30,&H50FFFFFF,&H50FFFFFF,&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,3,40,40,30,1"""
 
 
+def cor_ass(hexa):
+    """'FFD400' (RRGGBB) → '&H0000D4FF&' (ASS)."""
+    h = hexa.strip().lstrip("#").upper()
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&" if len(h) == 6 else AMARELO
+
+
+def estilos_moldura(cor):
+    """Moldura 1080x1920: título abaixo do logo, legenda logo abaixo do vídeo e CTA fixo na base."""
+    c = cor[:-1]
+    return f"""PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Leg,DejaVu Sans,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,8,70,70,1335,1
+Style: Caixa,DejaVu Sans,60,&H00000000,&H00000000,{c},&H00000000,-1,0,0,0,100,100,0,0,3,16,0,8,80,80,330,1
+Style: Cta,DejaVu Sans,56,&H00000000,&H00000000,{c},&H00000000,-1,0,0,0,100,100,0,0,3,18,0,2,80,80,150,1"""
+
+
 def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
-              final="SIGA PARA MAIS CORTES", horizontal=False, chamada_fixa=False):
-    """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
+              final="SIGA PARA MAIS CORTES", horizontal=False, chamada_fixa=False,
+              estilos=None, cta="", destaque=AMARELO):
+    """Legenda palavra a palavra + título-gancho, marca d'água, CTA fixo e chamada final."""
     cab = f"""[Script Info]
 ScriptType: v4.00+
-{ESTILOS_H if horizontal else ESTILOS_V}
+{estilos or (ESTILOS_H if horizontal else ESTILOS_V)}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -322,7 +389,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for i, (ini, fim, _) in enumerate(g):
             fim_ev = g[i + 1][0] if i + 1 < len(g) else min(max(fim, ini + 0.15) + 0.3, prox)
             texto = " ".join(
-                (r"{\c" + AMARELO + "}" + limpa(w) + r"{\c&H00FFFFFF&}") if j == i else limpa(w)
+                (r"{\c" + destaque + "}" + limpa(w) + r"{\c&H00FFFFFF&}") if j == i else limpa(w)
                 for j, (_, _, w) in enumerate(g))
             linhas.append(f"Dialogue: 0,{ts(ini)},{ts(fim_ev)},Leg,,0,0,0,,{texto}")
 
@@ -332,6 +399,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                       r"{\fscx80\fscy80\t(0,150,\fscx100\fscy100)}" + limpa(chamada))
     if marca:
         linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Marca,,0,0,0,,{marca}")
+    if cta:
+        linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Cta,,0,0,0,,{limpa(cta)}")
     if final and duracao > 10:
         linhas.append(f"Dialogue: 1,{ts(duracao - 2.5)},{ts(duracao)},Caixa,,0,0,0,,"
                       r"{\fad(200,0)}" + limpa(final))
@@ -494,6 +563,8 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
     fonte, palavras, dur = cortar_silencios(str(bruto), palavras, TRAB / f"{nome}_seco.mp4")
 
     ass = TRAB / f"{nome}.ass"
+    if formato == "moldura":
+        return renderizar_moldura(fonte, palavras, dur, corte, nome, ass)
     if formato == "imagem":
         imagem = corte.get("imagem_arquivo")
         if not imagem:  # nenhuma foto combinou: usa um quadro do meio do próprio corte
@@ -542,6 +613,45 @@ def renderizar_imagem(fonte, palavras, dur, corte, nome, imagem, ass):
          "-filter_complex", filtro, "-map", "[v]", "-map", "0:a?", "-t", f"{dur:.2f}",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", final])
+    return final
+
+
+def renderizar_moldura(fonte, palavras, dur, corte, nome, ass):
+    """Vídeo inteiro (sem recorte) no meio; em cima fundo + logo + título, embaixo legenda e CTA.
+    Fundo: imagem FUNDO_ARQUIVO, ou o próprio vídeo desfocado e escurecido."""
+    cor = cor_ass(env("COR_DESTAQUE", "FFD400"))
+    gerar_ass(palavras, ass, dur, chamada=env("TITULO_TOPO") or corte.get("chamada", ""),
+              final="", chamada_fixa=True, estilos=estilos_moldura(cor),
+              cta=env("CTA", "SIGA PARA MAIS"), destaque=cor)
+    entradas, n = ["-i", fonte], 1
+    fundo, logo = env("FUNDO_ARQUIVO"), env("LOGO_ARQUIVO")
+    if fundo and Path(fundo).exists():
+        entradas += ["-loop", "1", "-i", fundo]
+        filtro = (f"[{n}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,setsar=1[fundo];[0:v]")
+        n += 1
+    else:
+        filtro = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,boxblur=30:3,eq=brightness=-0.25[fundo];[b]")
+    # Vídeo inteiro numa área de até 1080x700 centralizada (16:9 fica 1080x608).
+    filtro += ("scale=1080:700:force_original_aspect_ratio=decrease,setsar=1,"
+               "eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5[vid];"
+               "[fundo][vid]overlay=(W-w)/2:(H-h)/2:shortest=1[c1];")
+    ultimo = "c1"
+    if logo and Path(logo).exists():
+        entradas += ["-loop", "1", "-i", logo]
+        filtro += (f"[{n}:v]scale=640:210:force_original_aspect_ratio=decrease[logo];"
+                   "[c1][logo]overlay=(W-w)/2:75:shortest=1[c2];")
+        ultimo = "c2"
+    barra = env("COR_DESTAQUE", "FFD400").lstrip("#")
+    filtro += (f"[{ultimo}]fps=30,ass={ass.as_posix()}[t];"
+               f"color=c=0x{barra}:s=1080x10:r=30[barra];"
+               f"[t][barra]overlay=x='-w+w*t/{max(dur, 1):.2f}':y=H-h:shortest=1[v]")
+    final = SAIDA / f"{nome}.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", *entradas, "-filter_complex", filtro,
+         "-map", "[v]", "-map", "0:a?", "-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", "21", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+         "-movflags", "+faststart", final])
     return final
 
 
@@ -661,8 +771,8 @@ def montar_textos(corte, info, video_id, longo=False):
     licenca = info.get("license") or ""
     descricao = (f"{corte.get('descricao', '')}\n\n" + capitulos(corte)
                  + " ".join(f"#{t}" for t in tags)
-                 + f"\n\nTrecho de: {info.get('title', '')} — {info.get('channel', '')}\n"
-                 f"https://youtu.be/{video_id}"
+                 + (f"\n\nTrecho de: {info.get('title', '')} — {info.get('channel', '')}\n"
+                    f"https://youtu.be/{video_id}" if video_id else "")
                  + (f"\nLicença: {licenca}" if licenca else ""))
     return titulo, descricao, tags
 
@@ -683,13 +793,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video-id", default=env("VIDEO_ID"))
     ap.add_argument("--arquivo", default="", help="vídeo local (pula o download)")
+    ap.add_argument("--drive-id", default=env("DRIVE_FILE_ID"), help="vídeo no Google Drive")
+    ap.add_argument("--pasta-saida", default=env("DRIVE_PASTA_SAIDA"),
+                    help="pasta do Drive onde os cortes prontos são salvos")
     ap.add_argument("--tema", default=env("TEMA"))
     ap.add_argument("--num-cortes", type=int, default=int(env("NUM_CORTES", "1")))
     ap.add_argument("--dur-min", type=int, default=int(env("DUR_MIN", "20")))
     ap.add_argument("--dur-max", type=int, default=int(env("DUR_MAX", "58")))
     ap.add_argument("--idioma", default=env("IDIOMA", "pt"))
     ap.add_argument("--formato", default=env("FORMATO", "auto"),
-                    choices=["auto", "blur", "crop", "imagem"])
+                    choices=["auto", "blur", "crop", "imagem", "moldura"])
     ap.add_argument("--publicar", default=env("PUBLICAR", "nao"))
     ap.add_argument("--privacidade", default=env("PRIVACIDADE", "private"))
     ap.add_argument("--horarios", default=env("HORARIOS"),
@@ -708,9 +821,19 @@ def main():
     TRAB.mkdir(exist_ok=True)
     if a.arquivo:
         video, info = a.arquivo, {"title": Path(a.arquivo).stem}
+    elif a.drive_id:
+        video = str(TRAB / "video.mp4")
+        info = {"title": Path(baixar_drive(a.drive_id, video)).stem}
+        info["duration"] = duracao_de(video)
     else:
         video, info = baixar(a.video_id, a.cookies)
     duracao = float(info.get("duration") or 1e9)
+    # Logo e fundo da moldura também podem vir do Drive (IDs dos arquivos).
+    for chave, destino in (("LOGO_ID", "LOGO_ARQUIVO"), ("FUNDO_ID", "FUNDO_ARQUIVO")):
+        if env(chave) and not env(destino):
+            caminho = TRAB / f"{chave.lower()}.img"
+            baixar_drive(env(chave), caminho)
+            os.environ[destino] = str(caminho)
 
     # Formato imagem: fotos do perfil em imagens/<perfil>/ (nome do arquivo descreve a cena).
     pasta = Path("imagens") / env("PERFIL", "impulsoreal")
@@ -730,7 +853,7 @@ def main():
         cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max,
                                   a.idioma, longo, [f.name for f in imagens])
 
-    resultado = {"status": "ok", "video_id": a.video_id, "tema": a.tema,
+    resultado = {"status": "ok", "video_id": a.video_id, "drive_id": a.drive_id, "tema": a.tema,
                  "video_titulo": info.get("title"), "canal": info.get("channel"),
                  "run_url": env("RUN_URL"), "cortes": []}
     horarios = [h.strip() for h in a.horarios.split(",") if h.strip()]
@@ -750,6 +873,9 @@ def main():
             titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
             corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
                           "descricao_final": descricao})
+            if a.pasta_saida:
+                corte["drive_link"] = subir_drive(
+                    arquivo, a.pasta_saida, f"{info.get('title', 'video')} - corte {i}.mp4")
             if a.publicar == "sim":
                 quando = horarios[i - 1] if i <= len(horarios) else ""
                 corte["publicar_em"] = quando
