@@ -16,12 +16,15 @@ on:
         required: true
       num_cortes:
         default: "3"
+      marca:
+        description: Perfil em marcas/ (cores, fontes, logo, CTA), ex. psicologia-expressa
+        default: ""
       tema:
-        description: Assunto do vídeo/cliente (ajuda a IA a escolher)
+        description: Assunto do vídeo (vazio = o tema do perfil da marca)
         default: ""
       cta:
-        description: Texto fixo da parte de baixo
-        default: "SIGA PARA MAIS"
+        description: Texto do botão (vazio = o do perfil da marca)
+        default: ""
       logo_id:
         description: ID do logo (PNG) no Drive
         default: ""
@@ -29,8 +32,8 @@ on:
         description: ID da imagem de fundo no Drive (vazio = vídeo desfocado)
         default: ""
       cor:
-        description: Cor de destaque (hex, sem #)
-        default: "FFD400"
+        description: Cor de destaque (hex, sem #; vazio = a do perfil)
+        default: ""
       titulo_topo:
         description: Título fixo do topo (vazio = a IA cria um por corte)
         default: ""
@@ -47,10 +50,13 @@ jobs:
       DRIVE_PASTA_SAIDA: ${{ github.event.client_payload.pasta_saida || inputs.pasta_saida }}
       NUM_CORTES: ${{ github.event.client_payload.num_cortes || inputs.num_cortes || '3' }}
       TEMA: ${{ github.event.client_payload.tema || inputs.tema }}
-      CTA: ${{ github.event.client_payload.cta || inputs.cta || 'SIGA PARA MAIS' }}
+      MARCA: ${{ github.event.client_payload.marca || inputs.marca }}
+      CTA: ${{ github.event.client_payload.cta || inputs.cta }}
+      CTA_SUB: ${{ github.event.client_payload.cta_sub }}
+      FUNDO_COR: ${{ github.event.client_payload.fundo_cor }}
       LOGO_ID: ${{ github.event.client_payload.logo_id || inputs.logo_id }}
       FUNDO_ID: ${{ github.event.client_payload.fundo_id || inputs.fundo_id }}
-      COR_DESTAQUE: ${{ github.event.client_payload.cor || inputs.cor || 'FFD400' }}
+      COR_DESTAQUE: ${{ github.event.client_payload.cor || inputs.cor }}
       TITULO_TOPO: ${{ github.event.client_payload.titulo_topo || inputs.titulo_topo }}
       DUR_MIN: ${{ github.event.client_payload.dur_min || '20' }}
       DUR_MAX: ${{ github.event.client_payload.dur_max || '58' }}

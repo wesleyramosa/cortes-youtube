@@ -216,7 +216,7 @@ Priorize: opinião forte, revelação, história com desfecho, dica prática, hu
 
 Responda somente JSON neste formato, ordenado pela nota (maior primeiro):
 {{"cortes":[{{"inicio":0.0,"fim":0.0,"nota":0,"gancho":"primeira frase do trecho","motivo":"por que viraliza",
-"chamada":"frase de impacto de 3 a 6 palavras para aparecer na tela, sem emojis",{campo_imagem}
+"chamada":"frase de impacto de 3 a 6 palavras para aparecer na tela, sem emojis; marque entre *asteriscos* as 2 ou 3 palavras mais fortes",{campo_imagem}
 "titulo":"título chamativo em {IDIOMAS.get(idioma, idioma)}, até 70 caracteres",
 "descricao":"1 ou 2 frases em {IDIOMAS.get(idioma, idioma)}","hashtags":["sem #, até 5"]}}]}}
 
@@ -319,7 +319,7 @@ def ts(seg):
 
 
 def limpa(p):
-    return p.upper().replace("\\", "").replace("{", "(").replace("}", ")")
+    return p.upper().replace("*", "").replace("\\", "").replace("{", "(").replace("}", ")")
 
 
 ESTILOS_V = f"""PlayResX: 1080
@@ -349,24 +349,10 @@ def cor_ass(hexa):
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&" if len(h) == 6 else AMARELO
 
 
-def estilos_moldura(cor):
-    """Moldura 1080x1920: título abaixo do logo, legenda logo abaixo do vídeo e CTA fixo na base."""
-    c = cor[:-1]
-    return f"""PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Leg,DejaVu Sans,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,8,70,70,1335,1
-Style: Caixa,DejaVu Sans,60,&H00000000,&H00000000,{c},&H00000000,-1,0,0,0,100,100,0,0,3,16,0,8,80,80,330,1
-Style: Cta,DejaVu Sans,56,&H00000000,&H00000000,{c},&H00000000,-1,0,0,0,100,100,0,0,3,18,0,2,80,80,150,1"""
-
-
 def gerar_ass(palavras, destino, duracao, chamada="", marca="", max_palavras=3,
               final="SIGA PARA MAIS CORTES", horizontal=False, chamada_fixa=False,
-              estilos=None, cta="", destaque=AMARELO):
-    """Legenda palavra a palavra + título-gancho, marca d'água, CTA fixo e chamada final."""
+              estilos=None, destaque=AMARELO, base="&H00FFFFFF&", extras=()):
+    """Legenda palavra a palavra + título-gancho, marca d'água e chamada final."""
     cab = f"""[Script Info]
 ScriptType: v4.00+
 {estilos or (ESTILOS_H if horizontal else ESTILOS_V)}
@@ -389,7 +375,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for i, (ini, fim, _) in enumerate(g):
             fim_ev = g[i + 1][0] if i + 1 < len(g) else min(max(fim, ini + 0.15) + 0.3, prox)
             texto = " ".join(
-                (r"{\c" + destaque + "}" + limpa(w) + r"{\c&H00FFFFFF&}") if j == i else limpa(w)
+                (r"{\c" + destaque + "}" + limpa(w) + r"{\c" + base + "}") if j == i else limpa(w)
                 for j, (_, _, w) in enumerate(g))
             linhas.append(f"Dialogue: 0,{ts(ini)},{ts(fim_ev)},Leg,,0,0,0,,{texto}")
 
@@ -399,8 +385,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                       r"{\fscx80\fscy80\t(0,150,\fscx100\fscy100)}" + limpa(chamada))
     if marca:
         linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Marca,,0,0,0,,{marca}")
-    if cta:
-        linhas.append(f"Dialogue: 1,{ts(0)},{ts(duracao)},Cta,,0,0,0,,{limpa(cta)}")
+    linhas += list(extras)
     if final and duracao > 10:
         linhas.append(f"Dialogue: 1,{ts(duracao - 2.5)},{ts(duracao)},Caixa,,0,0,0,,"
                       r"{\fad(200,0)}" + limpa(final))
@@ -616,36 +601,146 @@ def renderizar_imagem(fonte, palavras, dur, corte, nome, imagem, ass):
     return final
 
 
+# Identidade visual da moldura. Cada cliente tem marcas/<MARCA>/marca.json (+ logo.png);
+# variáveis de ambiente com o mesmo nome em maiúsculas sobrescrevem (ex.: CTA, COR_DESTAQUE).
+MARCA_PADRAO = {
+    "fundo_cor": "",            # vazio = o próprio vídeo desfocado e escurecido
+    "cor_texto": "FFFFFF",      # título e legenda
+    "cor_destaque": "FFD400",   # palavra falada, botão do CTA, barra de progresso
+    "cor_cta_texto": "000000",
+    "fonte_titulo": "Poppins ExtraBold",
+    "fonte_cta": "Poppins SemiBold",
+    "cta": "Siga para mais",
+    "cta_sub": "",              # linha pequena abaixo do botão
+    "titulo_topo": "",          # vazio = a IA cria um título por corte; *palavras* ficam em destaque
+    "logo_arredondado": True,
+    "tema": "",
+}
+
+
+def carregar_marca():
+    m = dict(MARCA_PADRAO)
+    pasta = Path("marcas") / env("MARCA")
+    if env("MARCA") and (pasta / "marca.json").exists():
+        m.update(json.loads((pasta / "marca.json").read_text(encoding="utf-8")))
+    for k in m:
+        if env(k.upper()):
+            m[k] = env(k.upper())
+    m["logo"] = env("LOGO_ARQUIVO") or (str(pasta / "logo.png") if (pasta / "logo.png").exists() else "")
+    m["fundo"] = env("FUNDO_ARQUIVO")
+    return m
+
+
+def tamanho_de(arquivo):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "csv=p=0", str(arquivo)],
+                       capture_output=True, text=True, check=True)
+    w, h = r.stdout.strip().split(",")[:2]
+    return int(w), int(h)
+
+
+def mascara(w, h, raio, destino):
+    """Máscara (cinza) de retângulo com cantos arredondados, para alphamerge."""
+    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=white:s={w}x{h},format=gray",
+         "-vf", f"geq=lum='255*lte(hypot(X-clip(X,{raio},W-{raio}),Y-clip(Y,{raio},H-{raio})),{raio})'",
+         "-frames:v", "1", destino])
+    return destino
+
+
+def texto_ass(t):
+    return t.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ").strip()
+
+
 def renderizar_moldura(fonte, palavras, dur, corte, nome, ass):
-    """Vídeo inteiro (sem recorte) no meio; em cima fundo + logo + título, embaixo legenda e CTA.
-    Fundo: imagem FUNDO_ARQUIVO, ou o próprio vídeo desfocado e escurecido."""
-    cor = cor_ass(env("COR_DESTAQUE", "FFD400"))
-    gerar_ass(palavras, ass, dur, chamada=env("TITULO_TOPO") or corte.get("chamada", ""),
-              final="", chamada_fixa=True, estilos=estilos_moldura(cor),
-              cta=env("CTA", "SIGA PARA MAIS"), destaque=cor)
+    """Fundo da marca; no topo logo + título, no meio o vídeo inteiro (sem recorte) em card
+    arredondado, logo abaixo a legenda e na base o CTA em forma de botão."""
+    m = carregar_marca()
+    destaque, texto = cor_ass(m["cor_destaque"]), cor_ass(m["cor_texto"])
+    fundo_liso = len(m["fundo_cor"].lstrip("#")) == 6
+
+    # Geometria: logo (até 260 de altura) → título → vídeo (até 1000x640) → legenda → CTA.
+    y_titulo = 315 if m["logo"] else 170
+    vw0, vh0 = tamanho_de(fonte)
+    esc = min(1000 / vw0, 640 / vh0)
+    vw, vh = int(vw0 * esc) // 2 * 2, int(vh0 * esc) // 2 * 2
+    y_vid = 625 if m["logo"] else 480
+    y_leg = y_vid + vh + 50
+
+    # Legenda sobre fundo liso: sem contorno, na cor do texto; sobre vídeo: branca com contorno.
+    contorno, sombra = ("0", "0") if fundo_liso else ("6", "3")
+    estilos = f"""PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Leg,{m['fonte_titulo']},100,{texto[:-1]},{texto[:-1]},&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,{contorno},{sombra},8,70,70,{y_leg},1
+Style: Titulo,{m['fonte_titulo']},106,{texto[:-1]},{texto[:-1]},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{contorno},0,8,70,70,{y_titulo},1
+Style: Botao,{m['fonte_cta']},74,{destaque[:-1]},{destaque[:-1]},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: Cta,{m['fonte_cta']},74,{cor_ass(m['cor_cta_texto'])[:-1]},&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+Style: Sub,{m['fonte_cta']},50,{texto[:-1]},{texto[:-1]},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1"""
+
+    fim = ts(dur)
+    extras = []
+    titulo = texto_ass(m["titulo_topo"] or corte.get("chamada", ""))
+    if titulo:  # *trecho* fica na cor de destaque, como na página de vendas
+        partes = titulo.split("*")
+        titulo = "".join((r"{\c" + destaque + "}" + p + r"{\c" + texto + "}") if k % 2 else p
+                         for k, p in enumerate(partes))
+        extras.append(f"Dialogue: 1,{ts(0)},{fim},Titulo,,0,0,0,,"
+                      r"{\fad(250,0)}" + titulo)
+    cta = texto_ass(m["cta"])
+    if cta:  # botão em pílula desenhado em ASS, largura estimada pelo texto
+        bw, bh = min(1000, int(len(cta) * 74 * 0.36) + 170), 130
+        x0, y0, r = (1080 - bw) // 2, 1560, bh // 2
+        pilula = (f"m {r} 0 l {bw - r} 0 b {bw} 0 {bw} {bh} {bw - r} {bh} "
+                  f"l {r} {bh} b 0 {bh} 0 0 {r} 0")
+        extras.append(f"Dialogue: 2,{ts(0)},{fim},Botao,,0,0,0,,"
+                      r"{\pos(" + f"{x0},{y0}" + r")\p1}" + pilula)
+        extras.append(f"Dialogue: 3,{ts(0)},{fim},Cta,,0,0,0,,"
+                      r"{\pos(540," + f"{y0 + bh // 2}" + r")}" + cta)
+        if m["cta_sub"]:
+            extras.append(f"Dialogue: 3,{ts(0)},{fim},Sub,,0,0,0,,"
+                          r"{\pos(540," + f"{y0 + bh + 60}" + r")}" + texto_ass(m["cta_sub"]))
+    gerar_ass(palavras, ass, dur, final="", estilos=estilos, destaque=destaque, base=texto,
+              extras=extras)
+
     entradas, n = ["-i", fonte], 1
-    fundo, logo = env("FUNDO_ARQUIVO"), env("LOGO_ARQUIVO")
-    if fundo and Path(fundo).exists():
-        entradas += ["-loop", "1", "-i", fundo]
+    if m["fundo"] and Path(m["fundo"]).exists():
+        entradas += ["-loop", "1", "-i", m["fundo"]]
         filtro = (f"[{n}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
                   "crop=1080:1920,setsar=1[fundo];[0:v]")
         n += 1
+    elif fundo_liso:
+        filtro = f"color=c=0x{m['fundo_cor'].lstrip('#')}:s=1080x1920:r=30[fundo];[0:v]"
     else:
         filtro = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
                   "crop=1080:1920,boxblur=30:3,eq=brightness=-0.25[fundo];[b]")
-    # Vídeo inteiro numa área de até 1080x700 centralizada (16:9 fica 1080x608).
-    filtro += ("scale=1080:700:force_original_aspect_ratio=decrease,setsar=1,"
-               "eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5[vid];"
-               "[fundo][vid]overlay=(W-w)/2:(H-h)/2:shortest=1[c1];")
+    entradas += ["-loop", "1", "-i", mascara(vw, vh, 28, str(TRAB / f"{nome}_mascara.png"))]
+    filtro += (f"scale={vw}:{vh},setsar=1,eq=contrast=1.06:saturation=1.15,unsharp=5:5:0.5,"
+               f"format=yuva420p[v0];[{n}:v]format=gray[mk];[v0][mk]alphamerge[vid];"
+               f"[fundo][vid]overlay=(W-w)/2:{y_vid}:shortest=1[c1];")
+    n += 1
     ultimo = "c1"
-    if logo and Path(logo).exists():
+    if m["logo"] and Path(m["logo"]).exists():
+        logo = m["logo"]
+        lw0, lh0 = tamanho_de(logo)
+        le = min(560 / lw0, 220 / lh0)
+        lw, lh = int(lw0 * le) // 2 * 2, int(lh0 * le) // 2 * 2
         entradas += ["-loop", "1", "-i", logo]
-        filtro += (f"[{n}:v]scale=640:210:force_original_aspect_ratio=decrease[logo];"
-                   "[c1][logo]overlay=(W-w)/2:75:shortest=1[c2];")
+        filtro += f"[{n}:v]scale={lw}:{lh},format=rgba[lg];"
+        n += 1
+        if m["logo_arredondado"] not in (False, "nao", "false", "0"):
+            entradas += ["-loop", "1", "-i", mascara(lw, lh, 24, str(TRAB / f"{nome}_mlogo.png"))]
+            filtro += f"[{n}:v]format=gray[ml];[lg][ml]alphamerge[lg2];"
+            n += 1
+        else:
+            filtro += "[lg]null[lg2];"
+        filtro += "[c1][lg2]overlay=(W-w)/2:55:shortest=1[c2];"
         ultimo = "c2"
-    barra = env("COR_DESTAQUE", "FFD400").lstrip("#")
-    filtro += (f"[{ultimo}]fps=30,ass={ass.as_posix()}[t];"
-               f"color=c=0x{barra}:s=1080x10:r=30[barra];"
+    barra = m["cor_destaque"].lstrip("#")
+    filtro += (f"[{ultimo}]fps=30,ass={ass.as_posix()}:fontsdir=fontes[t];"
+               f"color=c=0x{barra}:s=1080x12:r=30[barra];"
                f"[t][barra]overlay=x='-w+w*t/{max(dur, 1):.2f}':y=H-h:shortest=1[v]")
     final = SAIDA / f"{nome}.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", *entradas, "-filter_complex", filtro,
@@ -811,6 +906,8 @@ def main():
     ap.add_argument("--cookies", default=env("COOKIES_FILE", "cookies.txt"))
     ap.add_argument("--tipo", default=env("TIPO", "curto"), choices=["curto", "longo"])
     a = ap.parse_args()
+    if a.formato == "moldura" and not a.tema:
+        a.tema = carregar_marca()["tema"]
     longo = a.tipo == "longo"
     if longo:  # trecho de 4 a 10 min, um só por vídeo
         a.num_cortes = 1
