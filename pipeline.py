@@ -949,6 +949,9 @@ def main():
         if not segs:
             print("Sem legenda — transcrevendo o vídeo inteiro com Whisper", flush=True)
             segs = transcrever(video, a.idioma)
+        if env("INICIO_S"):  # só a parte do vídeo a partir daqui (ex.: trechos ainda não usados)
+            segs = [s for s in segs if s["ini"] >= float(env("INICIO_S"))]
+            print(f"Considerando só a partir de {env('INICIO_S')}s: {len(segs)} segmentos", flush=True)
         cortes = escolher_trechos(segs, info, a.tema, a.num_cortes, a.dur_min, a.dur_max,
                                   a.idioma, longo, [f.name for f in imagens])
 
@@ -974,7 +977,8 @@ def main():
                           "descricao_final": descricao})
             if a.pasta_saida:
                 corte["drive_link"] = subir_drive(
-                    arquivo, a.pasta_saida, f"{info.get('title', 'video')} - corte {i}.mp4")
+                    arquivo, a.pasta_saida,
+                    f"{info.get('title', 'video')} - corte {i - 1 + int(env('NUMERO_INICIAL', '1'))}.mp4")
             if a.publicar == "sim":
                 quando = horarios[i - 1] if i <= len(horarios) else ""
                 corte["publicar_em"] = quando

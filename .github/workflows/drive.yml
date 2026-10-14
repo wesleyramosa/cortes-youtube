@@ -62,6 +62,8 @@ jobs:
       DUR_MAX: ${{ github.event.client_payload.dur_max || '58' }}
       IDIOMA: ${{ github.event.client_payload.idioma || 'pt' }}
       FORMATO: moldura
+      INICIO_S: ${{ github.event.client_payload.inicio_s }}
+      NUMERO_INICIAL: ${{ github.event.client_payload.numero_inicial || '1' }}
       CORTES_JSON: ${{ toJSON(github.event.client_payload.cortes) }}
       PUBLICAR: nao
       CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
