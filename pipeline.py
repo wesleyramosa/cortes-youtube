@@ -941,6 +941,8 @@ def main():
     if a.trechos:
         cortes = [{"inicio": float(x.split("-")[0]), "fim": float(x.split("-")[1]), "chamada": env("CHAMADA")}
                   for x in a.trechos.split(",")]
+    elif env("CORTES_JSON", "null") != "null":  # refazer cortes já escolhidos (ex.: trocar só o CTA)
+        cortes = json.loads(env("CORTES_JSON"))
     else:
         segs = ler_json3()
         print(f"Legenda do YouTube: {len(segs)} segmentos", flush=True)
