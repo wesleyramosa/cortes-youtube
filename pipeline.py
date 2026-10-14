@@ -231,21 +231,22 @@ TRANSCRIÇÃO:
     sys.exit("Nenhum provedor de IA respondeu (Gemini e Groq ocupados ou sem chave).")
 
 
-def gemini(prompt):
-    """Tenta o modelo configurado e, se ocupado/aposentado, os outros Flash e Flash-Lite."""
+def gemini(prompt, anexos=(), temperatura=0.4):
+    """Tenta o modelo configurado e, se ocupado/aposentado, os outros Flash e Flash-Lite.
+    `anexos`: partes extras (ex.: áudio inline) enviadas antes do texto."""
     chave = env("GEMINI_API_KEY")
     if not chave:
         return None
     modelo = env("GEMINI_MODEL", "gemini-flash-latest")
-    corpo = {"contents": [{"parts": [{"text": prompt}]}],
-             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}}
+    corpo = {"contents": [{"parts": [*anexos, {"text": prompt}]}],
+             "generationConfig": {"responseMimeType": "application/json", "temperature": temperatura}}
     candidatos = [modelo] + [m for m in modelos_gemini(chave) if m != modelo]
     for rodada in range(2):
         for m in list(candidatos):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
             r = requests.post(url, headers={"x-goog-api-key": chave}, json=corpo, timeout=300)
             if r.ok:
-                print(f"Trechos escolhidos com {m}", flush=True)
+                print(f"Gemini respondeu com {m}", flush=True)
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             print(f"Gemini {m}: {r.status_code}", flush=True)
             if r.status_code not in (429, 500, 503):
@@ -294,6 +295,46 @@ def groq(prompt):
             return r.json()["choices"][0]["message"]["content"]
         print(f"Groq {m}: {r.status_code} {r.text[:300]}", flush=True)
     return None
+
+
+def revisar_legenda(arquivo, palavras, tema, idioma):
+    """O Gemini ouve o áudio do trecho e corrige palavras que o Whisper entendeu errado,
+    mantendo os tempos (uma correção por posição). Se falhar, fica a transcrição original."""
+    if not palavras or not env("GEMINI_API_KEY") or env("REVISAR_LEGENDA", "sim") != "sim":
+        return palavras
+    import base64
+    audio = TRAB / "revisao.mp3"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", arquivo, "-vn", "-ac", "1", "-b:a", "48k", audio])
+    dados = base64.b64encode(audio.read_bytes()).decode()
+    lista = "\n".join(f"{k}: {w}" for k, (_, _, w) in enumerate(palavras))
+    prompt = f"""Você revisa legendas. O áudio anexo é uma fala em {IDIOMAS.get(idioma, idioma)}{f' sobre {tema}' if tema else ''}.
+Abaixo está a transcrição automática, uma palavra por linha com sua posição. Ouça o áudio e corrija SÓ as
+palavras que foram entendidas errado (ex.: "soçando" quando a pessoa disse "esforçando"), com a grafia correta
+em português. Mantenha gírias e fala informal como foram ditas (ex.: "pra", "tá", "pera").
+Regras: uma correção substitui a palavra daquela posição; se no lugar dela foram ditas duas palavras, escreva as
+duas no mesmo campo; se a palavra não existe no áudio, use "". Mantenha a pontuação. Não reescreva o que está certo.
+
+Responda somente JSON: {{"correcoes":[{{"i":0,"palavra":"texto"}}]}} (lista vazia se estiver tudo certo)
+
+TRANSCRIÇÃO:
+{lista}"""
+    try:
+        texto = gemini(prompt, anexos=[{"inline_data": {"mime_type": "audio/mp3", "data": dados}}],
+                       temperatura=0.1)
+        correcoes = json.loads(texto)["correcoes"] if texto else []
+    except Exception as e:
+        print(f"Revisão da legenda falhou ({e}); usando a do Whisper", flush=True)
+        return palavras
+    novas = list(palavras)
+    for c in correcoes:
+        k = int(c.get("i", -1))
+        if 0 <= k < len(novas):
+            ini, fim, antes = novas[k]
+            depois = str(c.get("palavra", "")).strip()
+            if depois != antes:
+                print(f"Legenda: {antes!r} -> {depois!r}", flush=True)
+                novas[k] = (ini, fim, depois)
+    return [p for p in novas if p[2]]
 
 
 def ajustar(corte, duracao, dmin, dmax):
@@ -550,6 +591,7 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
         prompt = f"Fala em {IDIOMAS.get(idioma, idioma)}, com pontuação." + (f" Assunto: {tema}." if tema else "")
         _legendas[chave] = transcrever(str(bruto), idioma, palavras=True,
                                        modelo=env("WHISPER_MODEL_LEGENDA", "large-v3-turbo"), prompt=prompt)
+        _legendas[chave] = revisar_legenda(str(bruto), _legendas[chave], tema, idioma)
     palavras = _legendas[chave]
     if longo:  # vídeo longo mantém o ritmo original (e os capítulos batem com o tempo)
         fonte, dur = str(bruto), duracao_de(str(bruto))
