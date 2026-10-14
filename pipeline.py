@@ -1030,7 +1030,7 @@ def main():
             titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
             corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
                           "descricao_final": descricao})
-            numero = i - 1 + int(env("NUMERO_INICIAL", "1"))
+            numero = corte.get("numero") or i - 1 + int(env("NUMERO_INICIAL", "1"))
             nome_drive = f"{info.get('title', 'video')} - corte {numero}.mp4"
             if variantes:  # mesmo corte em várias versões de CTA, cada uma na sua pasta
                 corte["drive_links"] = {}
