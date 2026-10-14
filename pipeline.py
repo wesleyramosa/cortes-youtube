@@ -959,6 +959,8 @@ def main():
                  "video_titulo": info.get("title"), "canal": info.get("channel"),
                  "run_url": env("RUN_URL"), "cortes": []}
     horarios = [h.strip() for h in a.horarios.split(",") if h.strip()]
+    # Versões do mesmo corte: [{"cta": "Saiba mais", "pasta": "<id Drive>"}, ...]
+    variantes = json.loads(env("VARIANTES", "null")) if env("VARIANTES", "null") != "null" else None
     falhas = []
     for i, corte in enumerate(cortes, 1):
         # Cada corte é independente: um erro não derruba os outros (antes perdia os dois).
@@ -971,14 +973,23 @@ def main():
                 corte["imagem_arquivo"] = str(escolhida) if escolhida else ""
                 print(f"Imagem do corte {i}: {escolhida.name if escolhida else 'quadro do vídeo'}",
                       flush=True)
+            if variantes:
+                os.environ["CTA"] = variantes[0].get("cta", "")
             arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}", longo)
             titulo, descricao, tags = montar_textos(corte, info, a.video_id, longo)
             corte.update({"arquivo": arquivo.name, "titulo_final": titulo,
                           "descricao_final": descricao})
-            if a.pasta_saida:
-                corte["drive_link"] = subir_drive(
-                    arquivo, a.pasta_saida,
-                    f"{info.get('title', 'video')} - corte {i - 1 + int(env('NUMERO_INICIAL', '1'))}.mp4")
+            numero = i - 1 + int(env("NUMERO_INICIAL", "1"))
+            nome_drive = f"{info.get('title', 'video')} - corte {numero}.mp4"
+            if variantes:  # mesmo corte em várias versões de CTA, cada uma na sua pasta
+                corte["drive_links"] = {}
+                for k, v in enumerate(variantes):
+                    if k:  # a 1ª versão já foi renderizada acima
+                        os.environ["CTA"] = v.get("cta", "")
+                        arquivo = renderizar(video, corte, a.idioma, a.formato, f"corte_{i}_{k}", longo)
+                    corte["drive_links"][v.get("cta", str(k))] = subir_drive(arquivo, v["pasta"], nome_drive)
+            elif a.pasta_saida:
+                corte["drive_link"] = subir_drive(arquivo, a.pasta_saida, nome_drive)
             if a.publicar == "sim":
                 quando = horarios[i - 1] if i <= len(horarios) else ""
                 corte["publicar_em"] = quando

@@ -65,6 +65,7 @@ jobs:
       INICIO_S: ${{ github.event.client_payload.inicio_s }}
       NUMERO_INICIAL: ${{ github.event.client_payload.numero_inicial || '1' }}
       CORTES_JSON: ${{ toJSON(github.event.client_payload.cortes) }}
+      VARIANTES: ${{ toJSON(github.event.client_payload.variantes) }}
       PUBLICAR: nao
       CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
       CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}
