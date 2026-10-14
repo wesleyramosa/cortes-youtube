@@ -75,6 +75,7 @@ jobs:
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GROQ_MODEL: ${{ vars.GROQ_MODEL || 'llama-3.3-70b-versatile' }}
       WHISPER_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
+      WHISPER_MODEL_LEGENDA: ${{ vars.WHISPER_MODEL_LEGENDA || 'large-v3-turbo' }}
       GD_CLIENT_ID: ${{ secrets.GD_CLIENT_ID }}
       GD_CLIENT_SECRET: ${{ secrets.GD_CLIENT_SECRET }}
       GD_REFRESH_TOKEN: ${{ secrets.GD_REFRESH_TOKEN }}
@@ -96,7 +97,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: whisper-${{ env.WHISPER_MODEL }}
+          key: whisper-${{ env.WHISPER_MODEL }}-${{ env.WHISPER_MODEL_LEGENDA }}
 
       # Os cortes vão direto para a pasta do Drive. Não há upload-artifact de propósito:
       # o repositório é público e o vídeo pode ser de cliente.

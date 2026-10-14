@@ -150,20 +150,22 @@ def ler_json3():
 
 # ------------------------------------------------------------- transcrição
 
-_modelo = None
+_modelos = {}
+_legendas = {}  # (inicio, fim) -> palavras: as variantes de CTA reaproveitam a transcrição
 
 
-def whisper():
-    global _modelo
-    if _modelo is None:
+def whisper(nome=None):
+    nome = nome or env("WHISPER_MODEL", "small")
+    if nome not in _modelos:
         from faster_whisper import WhisperModel
-        _modelo = WhisperModel(env("WHISPER_MODEL", "small"), device="cpu", compute_type="int8")
-    return _modelo
+        _modelos[nome] = WhisperModel(nome, device="cpu", compute_type="int8")
+    return _modelos[nome]
 
 
-def transcrever(arquivo, idioma, palavras=False):
-    segs, _ = whisper().transcribe(arquivo, language=idioma or None,
-                                   word_timestamps=palavras, vad_filter=True)
+def transcrever(arquivo, idioma, palavras=False, modelo=None, prompt=None):
+    segs, _ = whisper(modelo).transcribe(arquivo, language=idioma or None, initial_prompt=prompt,
+                                         word_timestamps=palavras, vad_filter=True,
+                                         beam_size=5 if modelo else 1)
     segs = list(segs)
     if palavras:
         return [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
@@ -541,7 +543,14 @@ def renderizar(video, corte, idioma, formato, nome, longo=False):
          "-t", f"{corte['fim'] - corte['inicio']:.2f}", "-c:v", "libx264", "-preset", "veryfast",
          "-crf", "18", "-c:a", "aac", "-b:a", "160k", bruto])
 
-    palavras = transcrever(str(bruto), idioma, palavras=True)
+    # Legenda: modelo grande (o "small" erra muito português falado) + assunto como contexto.
+    chave = (corte["inicio"], corte["fim"])
+    if chave not in _legendas:
+        tema = env("TEMA") or (carregar_marca()["tema"] if env("MARCA") else "")
+        prompt = f"Fala em {IDIOMAS.get(idioma, idioma)}, com pontuação." + (f" Assunto: {tema}." if tema else "")
+        _legendas[chave] = transcrever(str(bruto), idioma, palavras=True,
+                                       modelo=env("WHISPER_MODEL_LEGENDA", "large-v3-turbo"), prompt=prompt)
+    palavras = _legendas[chave]
     if longo:  # vídeo longo mantém o ritmo original (e os capítulos batem com o tempo)
         fonte, dur = str(bruto), duracao_de(str(bruto))
         return renderizar_longo(fonte, palavras, dur, corte, nome)
